@@ -35,6 +35,23 @@ const io = new Server(httpServer, {
 io.on("connection", (socket) => {
   console.log("✔ User connected:", socket.id);
 
+  // 🚨 DEBUG: Log all incoming events
+  socket.onAny((eventName, ...args) => {
+    console.log(`📥 EVENT RECEIVED: ${eventName} from ${socket.id}`, args);
+
+    // Special logging for ICE candidate events
+    if (eventName.includes("ice") || eventName.includes("peer")) {
+      console.log(`🧊 ICE/PEER EVENT DETAILS:`, {
+        eventName,
+        socketId: socket.id,
+        argsLength: args.length,
+        hasCallback:
+          args.length > 0 && typeof args[args.length - 1] === "function",
+        timestamp: Date.now(),
+      });
+    }
+  });
+
   // Phase 1: Handle connection validation
   socket.emit("connection-validated", {
     socketId: socket.id,
@@ -42,9 +59,33 @@ io.on("connection", (socket) => {
     status: "connected",
   });
 
-  // Handle user joining with interests (Phase 2)
-  socket.on("join", (interests = []) => {
-    console.log("🚀 User joining:", socket.id, "with interests:", interests);
+  // Handle user finding partner (Phase 2) - renamed from "join" as it's reserved
+  socket.on("find-partner", (interests = [], callback) => {
+    console.log(
+      "🚀 FIND-PARTNER EVENT RECEIVED from:",
+      socket.id,
+      "with interests:",
+      interests
+    );
+
+    // Send acknowledgment if callback provided
+    if (typeof callback === "function") {
+      callback({
+        success: true,
+        message: "Find-partner event received by server",
+        socketId: socket.id,
+        timestamp: Date.now(),
+      });
+    }
+    console.log("📊 Current users before join:", Array.from(users.keys()));
+    console.log(
+      "📊 Current users data before join:",
+      Array.from(users.entries())
+    );
+    console.log("📊 Current waiting lists before join:");
+    waitingUsers.forEach((userIds, key) => {
+      console.log(`  ${key}: [${userIds.join(", ")}]`);
+    });
 
     users.set(socket.id, {
       id: socket.id,
@@ -52,7 +93,14 @@ io.on("connection", (socket) => {
       inCall: false,
     });
 
+    console.log("📊 Current users after join:", Array.from(users.keys()));
+    console.log(
+      "📊 Current users data after join:",
+      Array.from(users.entries())
+    );
+
     // Try to find a match
+    console.log("🔍 CALLING findMatch for:", socket.id);
     findMatch(socket.id, interests);
   });
 
@@ -80,6 +128,37 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Handle leaving queue
+  socket.on("leave-queue", () => {
+    console.log("📤 User leaving queue:", socket.id);
+
+    // Remove from waiting lists
+    waitingUsers.forEach((userIds, interests) => {
+      const index = userIds.indexOf(socket.id);
+      if (index > -1) {
+        userIds.splice(index, 1);
+      }
+    });
+
+    socket.emit("queue-left");
+  });
+
+  // Handle partner disconnect
+  socket.on("disconnect-partner", () => {
+    console.log("🔌 Disconnecting partner for:", socket.id);
+    const user = users.get(socket.id);
+    if (user && user.partnerId) {
+      const partner = users.get(user.partnerId);
+      if (partner) {
+        partner.inCall = false;
+        partner.partnerId = undefined;
+        io.to(user.partnerId).emit("partner-disconnected");
+      }
+      user.inCall = false;
+      user.partnerId = undefined;
+    }
+  });
+
   // Handle stopping chat (Phase 7)
   socket.on("stopChat", () => {
     console.log("🛑 Stopping chat for:", socket.id);
@@ -97,7 +176,75 @@ io.on("connection", (socket) => {
     socket.emit("chat-stopped");
   });
 
-  // WebRTC signaling (Phase 3)
+  // Phase 3: WebRTC signaling events
+  socket.on("webrtc-offer", (data) => {
+    console.log(
+      "📤 Forwarding WebRTC offer from:",
+      socket.id,
+      "to:",
+      data.partnerId
+    );
+    if (data.partnerId) {
+      socket.to(data.partnerId).emit("webrtc-offer", {
+        ...data,
+        partnerId: socket.id,
+      });
+    }
+  });
+
+  socket.on("webrtc-answer", (data) => {
+    console.log(
+      "📥 Forwarding WebRTC answer from:",
+      socket.id,
+      "to:",
+      data.partnerId
+    );
+    if (data.partnerId) {
+      socket.to(data.partnerId).emit("webrtc-answer", {
+        ...data,
+        partnerId: socket.id,
+      });
+    }
+  });
+
+  socket.on("webrtc-ice-candidate", (data, callback) => {
+    console.log(
+      "🧊 Forwarding ICE candidate from:",
+      socket.id,
+      "to:",
+      data.partnerId
+    );
+    console.log("🧊 ICE candidate details:", {
+      type: data.candidate?.type,
+      candidate: data.candidate?.candidate?.substring(0, 50) + "...",
+    });
+
+    if (data.partnerId) {
+      socket.to(data.partnerId).emit("webrtc-ice-candidate", {
+        ...data,
+        partnerId: socket.id,
+      });
+
+      // Send acknowledgment
+      if (typeof callback === "function") {
+        callback({
+          success: true,
+          message: "ICE candidate forwarded successfully",
+          timestamp: Date.now(),
+        });
+      }
+    } else {
+      if (typeof callback === "function") {
+        callback({
+          success: false,
+          message: "No partner ID provided",
+          timestamp: Date.now(),
+        });
+      }
+    }
+  });
+
+  // Legacy WebRTC signaling (for backward compatibility)
   socket.on("offer", (data) => {
     console.log("📤 Forwarding offer from:", socket.id);
     const user = users.get(socket.id);
@@ -119,6 +266,83 @@ io.on("connection", (socket) => {
     const user = users.get(socket.id);
     if (user && user.partnerId) {
       socket.to(user.partnerId).emit("ice-candidate", data);
+    }
+  });
+
+  // SimplePeer WebRTC signal handler
+  socket.on("webrtc-signal", (data, callback) => {
+    console.log(
+      "📡 Forwarding WebRTC signal from:",
+      socket.id,
+      "to:",
+      data.partnerId,
+      "type:",
+      data.type
+    );
+
+    if (data.partnerId) {
+      socket.to(data.partnerId).emit("webrtc-signal", {
+        ...data,
+        partnerId: socket.id,
+      });
+
+      // Send acknowledgment
+      if (typeof callback === "function") {
+        callback({
+          success: true,
+          message: "WebRTC signal forwarded successfully",
+          socketId: socket.id,
+          timestamp: Date.now(),
+        });
+      }
+    } else {
+      if (typeof callback === "function") {
+        callback({
+          success: false,
+          message: "No partner ID provided",
+          socketId: socket.id,
+          timestamp: Date.now(),
+        });
+      }
+    }
+  });
+
+  // Custom ICE candidate handler with acknowledgment (legacy)
+  socket.on("custom-ice-exchange", (data, callback) => {
+    console.log(
+      "🧊 Forwarding ICE candidate from:",
+      socket.id,
+      "to:",
+      data.partnerId
+    );
+    console.log("🧊 ICE candidate details:", {
+      type: data.candidate?.type,
+      candidate: data.candidate?.candidate?.substring(0, 50) + "...",
+    });
+
+    if (data.partnerId) {
+      socket.to(data.partnerId).emit("custom-ice-exchange", {
+        ...data,
+        partnerId: socket.id,
+      });
+
+      // Send acknowledgment
+      if (typeof callback === "function") {
+        callback({
+          success: true,
+          message: "ICE candidate forwarded successfully",
+          socketId: socket.id,
+          timestamp: Date.now(),
+        });
+      }
+    } else {
+      if (typeof callback === "function") {
+        callback({
+          success: false,
+          message: "No partner ID provided",
+          timestamp: Date.now(),
+        });
+      }
     }
   });
 
@@ -162,8 +386,66 @@ io.on("connection", (socket) => {
   });
 
   // Heartbeat for connection monitoring
-  socket.on("ping", () => {
+  socket.on("ping", (callback) => {
+    console.log("🏓 PING received from:", socket.id);
     socket.emit("pong", { timestamp: Date.now() });
+    // Send callback if provided
+    if (typeof callback === "function") {
+      callback({ received: true, timestamp: Date.now() });
+    }
+  });
+
+  // 🚨 DEBUG: Test ICE candidate reception
+  socket.on("test-ice-event", (data, callback) => {
+    console.log("🧪 TEST ICE EVENT RECEIVED:", data);
+    if (typeof callback === "function") {
+      callback({ received: true, timestamp: Date.now() });
+    }
+  });
+
+  // 🚨 DEBUG: Simple test handler
+  socket.on("simple-test", (data) => {
+    console.log(
+      "🧪 SIMPLE-TEST EVENT RECEIVED from:",
+      socket.id,
+      "data:",
+      data
+    );
+    // Send response back to client
+    socket.emit("test-response", {
+      message: "Server received your simple-test",
+      originalData: data,
+      timestamp: Date.now(),
+    });
+  });
+
+  // 🚨 DEBUG: Request server test
+  socket.on("request-server-test", (data) => {
+    console.log("🧪 SERVER-TEST REQUEST from:", socket.id, "data:", data);
+    // Send a test event back to the client
+    socket.emit("test-response", {
+      message: "This is a server-initiated test event",
+      clientId: data.clientId,
+      timestamp: Date.now(),
+    });
+  });
+
+  // 🚨 DEBUG: Test alternative join event name
+  socket.on("join-user", (interests = [], callback) => {
+    console.log(
+      "🧪 JOIN-USER EVENT RECEIVED from:",
+      socket.id,
+      "with interests:",
+      interests
+    );
+    if (typeof callback === "function") {
+      callback({
+        success: true,
+        message: "Join-user event received by server",
+        socketId: socket.id,
+        timestamp: Date.now(),
+      });
+    }
   });
 });
 
@@ -172,9 +454,27 @@ function findMatch(userId, interests) {
   if (!user || user.inCall) return;
 
   console.log("🔍 Finding match for:", userId, "with interests:", interests);
+  console.log("📊 Current users:", Array.from(users.keys()));
+  console.log(
+    "📊 Users in call:",
+    Array.from(users.values())
+      .filter((u) => u.inCall)
+      .map((u) => u.id)
+  );
 
-  // First try to find someone with matching interests
+  // FIRST: Try immediate random matching with any available user
+  console.log("🎯 Trying immediate random matching...");
+  for (const [otherUserId, otherUser] of users.entries()) {
+    if (otherUserId !== userId && !otherUser.inCall) {
+      console.log("✔ Found available partner:", otherUserId);
+      createMatch(userId, otherUserId);
+      return;
+    }
+  }
+
+  // SECOND: Try to find someone with matching interests (if both have interests)
   if (interests.length > 0) {
+    console.log("🔍 Trying interest-based matching...");
     for (const interest of interests) {
       const waitingList = waitingUsers.get(interest) || [];
       const availableUsers = waitingList.filter((id) => {
@@ -184,38 +484,60 @@ function findMatch(userId, interests) {
 
       if (availableUsers.length > 0) {
         const partnerId = availableUsers[0];
+        console.log("✔ Found interest-based partner:", partnerId);
         createMatch(userId, partnerId);
         return;
       }
     }
   }
 
-  // If no match found with interests, try random matching
-  for (const [otherUserId, otherUser] of users.entries()) {
-    if (otherUserId !== userId && !otherUser.inCall) {
-      createMatch(userId, otherUserId);
-      return;
-    }
+  // THIRD: Check general waiting list for users without interests
+  console.log("🔍 Checking general waiting list...");
+  const generalWaitingList = waitingUsers.get("general") || [];
+  const availableGeneralUsers = generalWaitingList.filter((id) => {
+    const otherUser = users.get(id);
+    return otherUser && !otherUser.inCall && id !== userId;
+  });
+
+  if (availableGeneralUsers.length > 0) {
+    const partnerId = availableGeneralUsers[0];
+    console.log("✔ Found general partner:", partnerId);
+    createMatch(userId, partnerId);
+    return;
   }
 
-  // No match found, add to waiting list
+  // FOURTH: No match found, add to appropriate waiting list
+  console.log("⏳ No immediate match found, adding to waiting list...");
+
   if (interests.length > 0) {
+    // Add to interest-specific waiting lists
     for (const interest of interests) {
       if (!waitingUsers.has(interest)) {
         waitingUsers.set(interest, []);
       }
-      waitingUsers.get(interest).push(userId);
+      if (!waitingUsers.get(interest).includes(userId)) {
+        waitingUsers.get(interest).push(userId);
+      }
     }
+    console.log("📝 Added to interest waiting lists:", interests);
   } else {
     // Add to general waiting list
     if (!waitingUsers.has("general")) {
       waitingUsers.set("general", []);
     }
-    waitingUsers.get("general").push(userId);
+    if (!waitingUsers.get("general").includes(userId)) {
+      waitingUsers.get("general").push(userId);
+    }
+    console.log("📝 Added to general waiting list");
   }
 
+  // Log current waiting lists for debugging
+  console.log("📊 Current waiting lists:");
+  waitingUsers.forEach((userIds, key) => {
+    console.log(`  ${key}: [${userIds.join(", ")}]`);
+  });
+
   // Notify user they're waiting
-  console.log("⏳ User added to waiting list:", userId);
   io.to(userId).emit("waiting");
 }
 
@@ -223,7 +545,15 @@ function createMatch(userId1, userId2) {
   const user1 = users.get(userId1);
   const user2 = users.get(userId2);
 
-  if (!user1 || !user2) return;
+  if (!user1 || !user2) {
+    console.error("❌ Cannot create match - user not found:", {
+      userId1,
+      userId2,
+      user1: !!user1,
+      user2: !!user2,
+    });
+    return;
+  }
 
   console.log("🤝 Creating match between:", userId1, "and", userId2);
 
@@ -234,27 +564,62 @@ function createMatch(userId1, userId2) {
   user2.partnerId = userId1;
 
   // Remove from waiting lists
-  waitingUsers.forEach((userIds) => {
+  let removedFromLists = 0;
+  waitingUsers.forEach((userIds, listName) => {
     const index1 = userIds.indexOf(userId1);
     const index2 = userIds.indexOf(userId2);
-    if (index1 > -1) userIds.splice(index1, 1);
-    if (index2 > -1) userIds.splice(index2, 1);
+    if (index1 > -1) {
+      userIds.splice(index1, 1);
+      removedFromLists++;
+      console.log(`✔ Removed ${userId1} from ${listName} waiting list`);
+    }
+    if (index2 > -1) {
+      userIds.splice(index2, 1);
+      removedFromLists++;
+      console.log(`✔ Removed ${userId2} from ${listName} waiting list`);
+    }
+  });
+  console.log(`📝 Removed users from ${removedFromLists} waiting list entries`);
+
+  // Determine who should initiate WebRTC
+  const initiator = userId1 < userId2 ? userId1 : userId2;
+  const sessionId = `${userId1 < userId2 ? userId1 : userId2}-${
+    userId1 < userId2 ? userId2 : userId1
+  }-${Date.now()}`;
+
+  console.log(
+    `🎯 Match details: initiator=${initiator}, sessionId=${sessionId}`
+  );
+
+  // Emit partner-found event for Phase 3
+  console.log(`📤 Sending partner-found to ${userId1}`);
+  io.to(userId1).emit("partner-found", {
+    partnerId: userId2,
+    sessionId: sessionId,
+    isInitiator: userId1 === initiator,
   });
 
-  // Notify both users - determine who should initiate WebRTC
-  const initiator = userId1 < userId2 ? userId1 : userId2;
+  console.log(`📤 Sending partner-found to ${userId2}`);
+  io.to(userId2).emit("partner-found", {
+    partnerId: userId1,
+    sessionId: sessionId,
+    isInitiator: userId2 === initiator,
+  });
 
+  // Also emit legacy matched event for backward compatibility
   io.to(userId1).emit("matched", {
     partnerId: userId2,
     isInitiator: userId1 === initiator,
-    sessionId: `${Math.min(userId1, userId2)}-${Math.max(userId1, userId2)}`,
+    sessionId: sessionId,
   });
 
   io.to(userId2).emit("matched", {
     partnerId: userId1,
     isInitiator: userId2 === initiator,
-    sessionId: `${Math.min(userId1, userId2)}-${Math.max(userId1, userId2)}`,
+    sessionId: sessionId,
   });
+
+  console.log("✅ Match created successfully!");
 }
 
 const PORT = process.env.PORT || 3001;
