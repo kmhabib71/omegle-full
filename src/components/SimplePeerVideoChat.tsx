@@ -56,6 +56,55 @@ export default function SimplePeerVideoChat({
   const [partnerId, setPartnerId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isLookingForPartner, setIsLookingForPartner] = useState(false);
+  const [disconnectionMessage, setDisconnectionMessage] = useState<
+    string | null
+  >(null);
+
+  // Phase 6: Partner Disconnection Handler
+  const handlePartnerDisconnection = useCallback((reason: string) => {
+    console.log("🔌 Phase 6: Handling partner disconnection -", reason);
+
+    // 1. Disconnection Detection - Clean up connection resources
+    if (peerRef.current) {
+      console.log("✅ Cleaning up SimplePeer connection resources");
+      peerRef.current.destroy();
+      peerRef.current = null;
+    }
+
+    // Clear partner video immediately
+    if (remoteVideoRef.current) {
+      console.log("✅ Clearing partner video immediately");
+      remoteVideoRef.current.srcObject = null;
+    }
+
+    // 2. Auto-Search Activation - Automatically re-enter matching queue
+    console.log("✅ Auto-search activation - re-entering matching queue");
+    setPartnerId(null);
+    setSessionId(null);
+    setIsLookingForPartner(true);
+    setDisconnectionMessage(`${reason} - Looking for new stranger...`);
+
+    // Update connection status
+    setConnectionState((prev) => ({
+      ...prev,
+      peer: "not_initialized",
+      queue: "searching",
+    }));
+
+    // Start new search automatically
+    if (socketRef.current?.connected) {
+      socketRef.current.emit("find-partner", [], (response: any) => {
+        console.log("📨 Auto-search find-partner response:", response);
+      });
+    }
+
+    // Clear disconnection message after 3 seconds
+    setTimeout(() => {
+      setDisconnectionMessage(null);
+    }, 3000);
+
+    console.log("✅ Phase 6 complete: Auto-search activated, UI updated");
+  }, []);
 
   const initializeSocket = useCallback(() => {
     console.log("🔌 Initializing socket connection...");
@@ -98,8 +147,14 @@ export default function SimplePeerVideoChat({
       }
     });
 
+    // Phase 6: Partner Disconnection Handling
+    socketRef.current.on("partner-disconnected", () => {
+      console.log("🔌 Phase 6: Partner disconnected - handling disconnection");
+      handlePartnerDisconnection("Partner disconnected");
+    });
+
     setConnectionState((prev) => ({ ...prev, socket: "connecting" }));
-  }, []);
+  }, [handlePartnerDisconnection]);
 
   const initializePeerWithData = useCallback(
     (isInitiator: boolean, partnerIdParam: string, sessionIdParam: string) => {
@@ -176,11 +231,19 @@ export default function SimplePeerVideoChat({
       peerRef.current.on("error", (err) => {
         console.error("❌ SimplePeer error:", err);
         setConnectionState((prev) => ({ ...prev, peer: "failed" }));
+        // Phase 6: Handle unexpected disconnections
+        if (partnerId) {
+          handlePartnerDisconnection("Connection error occurred");
+        }
       });
 
       peerRef.current.on("close", () => {
         console.log("🔌 SimplePeer connection closed");
         setConnectionState((prev) => ({ ...prev, peer: "not_initialized" }));
+        // Phase 6: Handle WebRTC connection closure
+        if (partnerId) {
+          handlePartnerDisconnection("Connection closed");
+        }
       });
 
       setConnectionState((prev) => ({ ...prev, peer: "connecting" }));
@@ -309,6 +372,7 @@ export default function SimplePeerVideoChat({
     setPartnerId(null);
     setSessionId(null);
     setIsLookingForPartner(false);
+    setDisconnectionMessage(null);
     setConnectionState((prev) => ({
       ...prev,
       peer: "not_initialized",
@@ -392,6 +456,18 @@ export default function SimplePeerVideoChat({
           </div>
         </div>
 
+        {/* Phase 6: Disconnection Message Display */}
+        {disconnectionMessage && (
+          <div className="bg-orange-600 rounded-lg p-4 mb-6 text-center">
+            <div className="flex items-center justify-center gap-2">
+              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+              <span className="text-lg font-semibold">
+                {disconnectionMessage}
+              </span>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
           <div className="bg-gray-800 rounded-lg p-4">
             <h3 className="text-lg font-semibold mb-3">You</h3>
@@ -444,7 +520,11 @@ export default function SimplePeerVideoChat({
           {isSearching && (
             <div className="flex items-center gap-4">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-              <span className="text-lg">Searching for partner...</span>
+              <span className="text-lg">
+                {disconnectionMessage
+                  ? "Looking for new stranger..."
+                  : "Searching for partner..."}
+              </span>
               <button
                 onClick={stopSession}
                 className="px-6 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-semibold"
