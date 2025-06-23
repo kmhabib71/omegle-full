@@ -9,7 +9,6 @@ import { PhaseOneDebugger } from "@/components/PhaseOneDebugger";
 import { PhaseTwoDebugger } from "@/components/PhaseTwoDebugger";
 import { PhaseThreeDebugger } from "@/components/PhaseThreeDebugger";
 
-// Types for better type safety
 interface MediaDeviceStatus {
   camera: boolean;
   microphone: boolean;
@@ -48,7 +47,7 @@ interface VideoChatProps {
   session: any;
 }
 
-export default function VideoChat({ session }: VideoChatProps) {
+export default function VideoChatSimplePeer({ session }: VideoChatProps) {
   const router = useRouter();
 
   // Socket and SimplePeer refs
@@ -99,14 +98,13 @@ export default function VideoChat({ session }: VideoChatProps) {
   const [isLookingForPartner, setIsLookingForPartner] = useState(false);
   const [showStopButton, setShowStopButton] = useState(false);
   const [partnerId, setPartnerId] = useState<string | null>(null);
-
-  // Phase 3 specific state
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [isConnectedToPartner, setIsConnectedToPartner] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isInitiator, setIsInitiator] = useState(false);
   const [showNextButton, setShowNextButton] = useState(false);
   const [messageInputEnabled, setMessageInputEnabled] = useState(false);
+
   const [mediaConstraints] = useState<MediaStreamConstraints>({
     video: {
       width: { ideal: 640 },
@@ -126,10 +124,8 @@ export default function VideoChat({ session }: VideoChatProps) {
       console.log("🔌 Initializing socket connection...");
       setConnectionState((prev) => ({ ...prev, socket: "connecting" }));
 
-      // Wait for client-side environment
       if (typeof window === "undefined") return;
 
-      // Initialize Socket.IO connection
       socketRef.current = io(
         process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001",
         {
@@ -173,7 +169,6 @@ export default function VideoChat({ session }: VideoChatProps) {
         updateStartButtonState();
       });
 
-      // Setup partner matching listeners
       setupPartnerListeners();
     } catch (error) {
       console.error("❌ Socket initialization error:", error);
@@ -181,7 +176,6 @@ export default function VideoChat({ session }: VideoChatProps) {
     }
   };
 
-  // Initialize SimplePeer (replaces WebRTC initialization)
   const initializeSimplePeer = () => {
     console.log("🔗 Initializing SimplePeer...");
     setConnectionState((prev) => ({ ...prev, webrtc: "initialized" }));
@@ -193,18 +187,15 @@ export default function VideoChat({ session }: VideoChatProps) {
     updateStartButtonState();
   };
 
-  // Phase 1: Media Device Preparation
   const checkMediaDevices = async () => {
     try {
       console.log("🎥 Checking media devices...");
       setConnectionState((prev) => ({ ...prev, media: "checking" }));
 
-      // Check if navigator.mediaDevices is available
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error("Media devices not supported");
       }
 
-      // Check device availability
       const devices = await navigator.mediaDevices.enumerateDevices();
       const hasCamera = devices.some((device) => device.kind === "videoinput");
       const hasMicrophone = devices.some(
@@ -217,52 +208,19 @@ export default function VideoChat({ session }: VideoChatProps) {
         microphone: hasMicrophone,
       }));
 
-      // Check permissions
-      try {
-        const cameraPermission = await navigator.permissions.query({
-          name: "camera" as PermissionName,
-        });
-        const microphonePermission = await navigator.permissions.query({
-          name: "microphone" as PermissionName,
-        });
-
-        setMediaDeviceStatus((prev) => ({
-          ...prev,
-          permissions: {
-            camera: cameraPermission.state,
-            microphone: microphonePermission.state,
-          },
-        }));
-
-        setPhase1Checkpoints((prev) => ({
-          ...prev,
-          cameraPermission: cameraPermission.state === "granted",
-          microphonePermission: microphonePermission.state === "granted",
-          deviceAvailability: hasCamera && hasMicrophone,
-        }));
-      } catch (permError) {
-        console.warn("⚠️ Permission check failed:", permError);
-        // Some browsers don't support permission queries
-        setPhase1Checkpoints((prev) => ({
-          ...prev,
-          deviceAvailability: hasCamera && hasMicrophone,
-        }));
-      }
+      setPhase1Checkpoints((prev) => ({
+        ...prev,
+        deviceAvailability: hasCamera && hasMicrophone,
+      }));
 
       setConnectionState((prev) => ({ ...prev, media: "ready" }));
       updateStartButtonState();
     } catch (error) {
       console.error("❌ Media device check failed:", error);
       setConnectionState((prev) => ({ ...prev, media: "error" }));
-      setMediaDeviceStatus((prev) => ({
-        ...prev,
-        camera: false,
-        microphone: false,
-      }));
     }
   };
 
-  // Initialize local stream (but don't start displaying yet)
   const initializeLocalStream = async () => {
     try {
       console.log("🎥 Initializing media devices...");
@@ -288,7 +246,6 @@ export default function VideoChat({ session }: VideoChatProps) {
     }
   };
 
-  // Update START button state based on all checkpoints
   const updateStartButtonState = () => {
     const canStart =
       connectionState.socket === "connected" &&
@@ -302,7 +259,6 @@ export default function VideoChat({ session }: VideoChatProps) {
     }));
   };
 
-  // Reset all states to initial
   const resetAllStates = () => {
     setIsLookingForPartner(false);
     setShowStopButton(false);
@@ -315,7 +271,6 @@ export default function VideoChat({ session }: VideoChatProps) {
     setMessageInputEnabled(false);
     setConnectionState((prev) => ({ ...prev, queue: "not_in_queue" }));
 
-    // Clean up SimplePeer connection
     if (peerRef.current) {
       peerRef.current.destroy();
       peerRef.current = null;
@@ -324,12 +279,10 @@ export default function VideoChat({ session }: VideoChatProps) {
     clearVideoFrames();
   };
 
-  // Phase 2: START Button Click Flow
   const handleStartChat = async () => {
     try {
       console.log("🔍 Starting partner search...");
 
-      // Phase 2 Checkpoint 1: Pre-connection Validation
       if (connectionState.socket !== "connected") {
         console.error("❌ Socket not connected");
         return;
@@ -341,7 +294,6 @@ export default function VideoChat({ session }: VideoChatProps) {
         if (!localStreamRef.current) return;
       }
 
-      // Phase 2 Checkpoint 2: Media Stream Setup
       const localVideo = document.getElementById(
         "localVideo"
       ) as HTMLVideoElement;
@@ -351,12 +303,10 @@ export default function VideoChat({ session }: VideoChatProps) {
         console.log("✅ Local video stream displayed");
       }
 
-      // Phase 2 Checkpoint 3: Queue Entry Process
       setIsLookingForPartner(true);
       setShowStopButton(true);
       setConnectionState((prev) => ({ ...prev, queue: "searching" }));
 
-      // Phase 2 Checkpoint 4: Button State Management
       setPhase1Checkpoints((prev) => ({
         ...prev,
         startButtonVisible: false,
@@ -364,7 +314,6 @@ export default function VideoChat({ session }: VideoChatProps) {
         stopButtonHidden: false,
       }));
 
-      // Send find-partner request with acknowledgment
       socketRef.current?.emit("find-partner", [], (response: any) => {
         console.log("📨 Find-partner response:", response);
       });
@@ -374,11 +323,9 @@ export default function VideoChat({ session }: VideoChatProps) {
     }
   };
 
-  // Setup partner matching listeners
   const setupPartnerListeners = () => {
     if (!socketRef.current) return;
 
-    // Partner found event
     socketRef.current.on("partner-found", (data: any) => {
       console.log("🎯 Partner found:", data);
       setPartnerId(data.partnerId);
@@ -386,7 +333,6 @@ export default function VideoChat({ session }: VideoChatProps) {
       setIsInitiator(data.isInitiator);
       setConnectionState((prev) => ({ ...prev, queue: "matched" }));
 
-      // Initialize SimplePeer connection
       initializePeerConnection(
         data.partnerId,
         data.sessionId,
@@ -394,7 +340,6 @@ export default function VideoChat({ session }: VideoChatProps) {
       );
     });
 
-    // WebRTC signaling
     socketRef.current.on("webrtc-signal", (data: any) => {
       console.log("📡 Received WebRTC signal:", data.signal.type);
       if (peerRef.current) {
@@ -403,7 +348,6 @@ export default function VideoChat({ session }: VideoChatProps) {
     });
   };
 
-  // Initialize SimplePeer connection (Phase 3)
   const initializePeerConnection = (
     partnerId: string,
     sessionId: string,
@@ -422,14 +366,12 @@ export default function VideoChat({ session }: VideoChatProps) {
         return;
       }
 
-      // Create SimplePeer instance
       peerRef.current = new SimplePeer({
         initiator: isInitiator,
         trickle: true,
         stream: localStreamRef.current,
       });
 
-      // Handle signaling
       peerRef.current.on("signal", (signal: any) => {
         console.log(
           "📤 Sending signal to partner via socket, partnerId:",
@@ -449,7 +391,6 @@ export default function VideoChat({ session }: VideoChatProps) {
         );
       });
 
-      // Handle connection establishment
       peerRef.current.on("connect", () => {
         console.log("🎉 SimplePeer connection established!");
         setIsConnectedToPartner(true);
@@ -459,7 +400,6 @@ export default function VideoChat({ session }: VideoChatProps) {
         setMessageInputEnabled(true);
       });
 
-      // Handle remote stream
       peerRef.current.on("stream", (stream: MediaStream) => {
         console.log("🎥 Received remote stream");
         setRemoteStream(stream);
@@ -474,13 +414,11 @@ export default function VideoChat({ session }: VideoChatProps) {
         }
       });
 
-      // Handle errors
       peerRef.current.on("error", (error: any) => {
         console.error("❌ SimplePeer error:", error);
         handlePartnerDisconnect();
       });
 
-      // Handle connection close
       peerRef.current.on("close", () => {
         console.log("❌ SimplePeer connection closed");
         handlePartnerDisconnect();
@@ -491,7 +429,6 @@ export default function VideoChat({ session }: VideoChatProps) {
     }
   };
 
-  // Handle partner disconnect
   const handlePartnerDisconnect = () => {
     console.log("🔄 Handling partner disconnect");
 
@@ -505,7 +442,6 @@ export default function VideoChat({ session }: VideoChatProps) {
     setRemoteStream(null);
     setConnectionState((prev) => ({ ...prev, queue: "not_in_queue" }));
 
-    // Reset UI state
     setPhase1Checkpoints((prev) => ({
       ...prev,
       startButtonVisible: true,
@@ -513,7 +449,6 @@ export default function VideoChat({ session }: VideoChatProps) {
       stopButtonHidden: true,
     }));
 
-    // Clean up peer connection
     if (peerRef.current) {
       peerRef.current.destroy();
       peerRef.current = null;
@@ -522,17 +457,14 @@ export default function VideoChat({ session }: VideoChatProps) {
     clearVideoFrames();
   };
 
-  // Handle stop chat
   const handleStopChat = () => {
     console.log("🛑 Stopping chat");
 
-    // Disconnect from partner if connected
     if (peerRef.current) {
       peerRef.current.destroy();
       peerRef.current = null;
     }
 
-    // Leave queue if searching
     if (socketRef.current && isLookingForPartner) {
       socketRef.current.emit("leave-queue");
     }
@@ -540,7 +472,6 @@ export default function VideoChat({ session }: VideoChatProps) {
     resetAllStates();
   };
 
-  // Clear video frames
   const clearVideoFrames = () => {
     const localVideo = document.getElementById(
       "localVideo"
@@ -565,7 +496,6 @@ export default function VideoChat({ session }: VideoChatProps) {
     }));
   };
 
-  // Test Socket Connection (Debug function)
   const testSocketConnection = () => {
     if (!socketRef.current) {
       console.log("❌ No socket connection to test");
@@ -576,16 +506,13 @@ export default function VideoChat({ session }: VideoChatProps) {
     console.log("Socket ID:", socketRef.current.id);
     console.log("Socket connected:", socketRef.current.connected);
 
-    // Test ping
     socketRef.current.emit("ping", { timestamp: Date.now() });
 
-    // Test find-partner with callback
     socketRef.current.emit("find-partner", [], (response: any) => {
       console.log("🧪 Test find-partner response:", response);
     });
   };
 
-  // Phase 3 Test Function
   const runPhase3Test = async () => {
     console.log("🧪 Running Phase 3 test...");
 
@@ -605,12 +532,10 @@ export default function VideoChat({ session }: VideoChatProps) {
     console.log("- SimplePeer ready:", typeof SimplePeer !== "undefined");
   };
 
-  // Initialize everything on component mount
   useEffect(() => {
     const initializePhase1 = async () => {
       console.log("🚀 Starting Phase 1 initialization...");
 
-      // Initialize all Phase 1 components
       await initializeSocketConnection();
       initializeSimplePeer();
       await checkMediaDevices();
@@ -621,7 +546,6 @@ export default function VideoChat({ session }: VideoChatProps) {
 
     initializePhase1();
 
-    // Cleanup on unmount
     return () => {
       if (socketRef.current) {
         socketRef.current.disconnect();
@@ -635,24 +559,8 @@ export default function VideoChat({ session }: VideoChatProps) {
     };
   }, []);
 
-  // Helper functions for debug panel
-  const getStatusIcon = (status: boolean) => (status ? "✔" : "❌");
-  const getConnectionColor = (state: string) => {
-    switch (state) {
-      case "connected":
-        return "text-green-600";
-      case "connecting":
-        return "text-yellow-600";
-      case "error":
-        return "text-red-600";
-      default:
-        return "text-gray-600";
-    }
-  };
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      {/* Header */}
       <header className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-4">
@@ -688,7 +596,6 @@ export default function VideoChat({ session }: VideoChatProps) {
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="space-y-6">
-          {/* Debug Panels */}
           {debugMode && (
             <>
               <PhaseOneDebugger
@@ -708,7 +615,7 @@ export default function VideoChat({ session }: VideoChatProps) {
               <PhaseThreeDebugger
                 connectionState={connectionState}
                 partnerId={partnerId}
-                peerConnection={peerRef.current as any} // SimplePeer instance
+                peerConnection={peerRef.current as any}
                 localStream={localStreamRef.current}
                 remoteStream={remoteStream}
                 isConnectedToPartner={isConnectedToPartner}
@@ -716,7 +623,6 @@ export default function VideoChat({ session }: VideoChatProps) {
                 onTestPhase3={runPhase3Test}
               />
 
-              {/* Socket Test Panel */}
               <div className="bg-red-50 border border-red-200 rounded-lg p-4">
                 <h3 className="text-red-800 font-semibold mb-2">
                   🚨 DEBUG MODE
@@ -735,10 +641,8 @@ export default function VideoChat({ session }: VideoChatProps) {
             </>
           )}
 
-          {/* Video Chat Interface */}
           <div className="bg-white rounded-lg shadow-lg p-6">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Local Video */}
               <div className="bg-black rounded-lg aspect-video flex items-center justify-center relative">
                 <video
                   id="localVideo"
@@ -760,7 +664,6 @@ export default function VideoChat({ session }: VideoChatProps) {
                 </div>
               </div>
 
-              {/* Remote Video */}
               <div className="bg-gray-800 rounded-lg aspect-video flex items-center justify-center">
                 <video
                   id="remoteVideo"
@@ -778,9 +681,7 @@ export default function VideoChat({ session }: VideoChatProps) {
               </div>
             </div>
 
-            {/* Controls */}
             <div className="mt-6 flex justify-center space-x-4">
-              {/* START Button */}
               {phase1Checkpoints.startButtonVisible &&
                 !isConnectedToPartner && (
                   <button
@@ -800,7 +701,6 @@ export default function VideoChat({ session }: VideoChatProps) {
                   </button>
                 )}
 
-              {/* NEXT Button */}
               {showNextButton && (
                 <button
                   onClick={() => {
@@ -814,7 +714,6 @@ export default function VideoChat({ session }: VideoChatProps) {
                 </button>
               )}
 
-              {/* STOP Button */}
               {showStopButton && (
                 <button
                   onClick={handleStopChat}
@@ -825,7 +724,6 @@ export default function VideoChat({ session }: VideoChatProps) {
               )}
             </div>
 
-            {/* Message Input */}
             {messageInputEnabled && (
               <div className="mt-4 flex space-x-2">
                 <input
@@ -848,7 +746,6 @@ export default function VideoChat({ session }: VideoChatProps) {
               </div>
             )}
 
-            {/* Connection Status */}
             <div className="mt-4 text-center">
               <div className="text-sm text-gray-600 mb-2">
                 {isConnectedToPartner
@@ -866,7 +763,6 @@ export default function VideoChat({ session }: VideoChatProps) {
                   : "⚪ Disconnected"}
               </div>
 
-              {/* Phase 1 Progress Bar */}
               <div className="mt-2">
                 <div className="text-xs text-gray-500 mb-1">
                   Phase 1 Progress (
@@ -889,7 +785,6 @@ export default function VideoChat({ session }: VideoChatProps) {
             </div>
           </div>
 
-          {/* Navigation */}
           <div className="mt-6 text-center space-x-4">
             <button
               onClick={() => router.push("/")}

@@ -25,7 +25,13 @@ interface MediaDeviceStatus {
   };
 }
 
-export default function SimplePeerVideoChat() {
+interface SimplePeerVideoChatProps {
+  session?: any;
+}
+
+export default function SimplePeerVideoChat({
+  session,
+}: SimplePeerVideoChatProps) {
   const socketRef = useRef<Socket | null>(null);
   const peerRef = useRef<SimplePeer.Instance | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -366,11 +372,11 @@ export default function SimplePeerVideoChat() {
               disabled={!canStart}
               className={`px-8 py-3 rounded-lg font-semibold text-lg ${
                 canStart
-                  ? "bg-blue-600 hover:bg-blue-700 text-white"
+                  ? "bg-green-600 hover:bg-green-700 text-white"
                   : "bg-gray-600 text-gray-400 cursor-not-allowed"
               }`}
             >
-              Start
+              START
             </button>
           )}
 
@@ -382,7 +388,7 @@ export default function SimplePeerVideoChat() {
                 onClick={stopSession}
                 className="px-6 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-semibold"
               >
-                Stop
+                STOP
               </button>
             </div>
           )}
@@ -391,10 +397,20 @@ export default function SimplePeerVideoChat() {
             <div className="flex items-center gap-4">
               <span className="text-lg text-green-400">✅ Connected!</span>
               <button
+                onClick={() => {
+                  console.log("🔄 Finding next partner...");
+                  stopSession();
+                  setTimeout(() => startSearch(), 1000);
+                }}
+                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold"
+              >
+                NEXT
+              </button>
+              <button
                 onClick={stopSession}
                 className="px-6 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-semibold"
               >
-                Next
+                STOP
               </button>
             </div>
           )}
