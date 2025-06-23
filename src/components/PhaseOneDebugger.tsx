@@ -39,6 +39,8 @@ export const PhaseOneDebugger = () => {
     statesReset: false,
   });
 
+  const [isMinimized, setIsMinimized] = useState(false);
+
   const runPhase1Test = async () => {
     console.log("🧪 Running Phase 1 Test...");
 
@@ -158,99 +160,110 @@ export const PhaseOneDebugger = () => {
         <h3 className="text-lg font-bold text-yellow-400">
           🧪 Phase 1 Test Suite
         </h3>
-        <button
-          onClick={runPhase1Test}
-          className="px-3 py-1 bg-green-600 hover:bg-green-700 rounded text-xs"
-        >
-          Run Test
-        </button>
-      </div>
-
-      <div className="space-y-4">
-        {/* Connection Tests */}
-        <div>
-          <h4 className="text-yellow-400 font-bold mb-2">
-            🔌 Connection Tests
-          </h4>
-          <div className="space-y-1">
-            <div>
-              {getStatusIcon(debugState.socketConnection)} Socket Connection
-            </div>
-            <div>
-              {getStatusIcon(debugState.networkConnectivity)} Network
-              Connectivity
-            </div>
-            <div>
-              {getStatusIcon(debugState.webrtcInitialized)} WebRTC Initialized
-            </div>
-            <div>
-              {getStatusIcon(debugState.connectionStateSet)} Connection State
-              Set
-            </div>
-          </div>
-        </div>
-
-        {/* Media Tests */}
-        <div>
-          <h4 className="text-yellow-400 font-bold mb-2">🎥 Media Tests</h4>
-          <div className="space-y-1">
-            <div>
-              {getStatusIcon(debugState.cameraPermission)} Camera Permission
-            </div>
-            <div>
-              {getStatusIcon(debugState.microphonePermission)} Microphone
-              Permission
-            </div>
-            <div>
-              {getStatusIcon(debugState.deviceAvailability)} Device Availability
-            </div>
-            <div>
-              {getStatusIcon(debugState.localStreamInitialized)} Local Stream
-              Initialized
-            </div>
-            <div>
-              {getStatusIcon(debugState.mediaConstraintsSet)} Media Constraints
-              Set
-            </div>
-          </div>
-        </div>
-
-        {/* UI Tests */}
-        <div>
-          <h4 className="text-yellow-400 font-bold mb-2">🎛️ UI Tests</h4>
-          <div className="space-y-1">
-            <div>
-              {getStatusIcon(debugState.startButtonVisible)} START Button
-              Visible
-            </div>
-            <div>
-              {getStatusIcon(!debugState.startButtonDisabled)} START Button
-              Enabled
-            </div>
-            <div>
-              {getStatusIcon(debugState.nextButtonHidden)} NEXT Button Hidden
-            </div>
-            <div>
-              {getStatusIcon(debugState.stopButtonHidden)} STOP Button Hidden
-            </div>
-            <div>
-              {getStatusIcon(debugState.videoFramesCleared)} Video Frames
-              Cleared
-            </div>
-            <div>{getStatusIcon(debugState.statesReset)} States Reset</div>
-          </div>
-        </div>
-
-        {/* Overall Status */}
-        <div className="pt-2 border-t border-blue-700">
-          <div className="text-lg">
-            Phase 1 Complete: {allComplete ? "✔" : "❌"}
-          </div>
-          <div className="text-sm mt-2">
-            Progress: {Object.values(debugState).filter(Boolean).length}/15
-          </div>
+        <div className="flex space-x-2">
+          <button
+            onClick={() => setIsMinimized(!isMinimized)}
+            className="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-xs"
+          >
+            {isMinimized ? "Show" : "Hide"}
+          </button>
+          <button
+            onClick={runPhase1Test}
+            className="px-3 py-1 bg-green-600 hover:bg-green-700 rounded text-xs"
+          >
+            Run Test
+          </button>
         </div>
       </div>
+
+      {!isMinimized && (
+        <div className="space-y-4">
+          {/* Connection Tests */}
+          <div>
+            <h4 className="text-yellow-400 font-bold mb-2">
+              🔌 Connection Tests
+            </h4>
+            <div className="space-y-1">
+              <div>
+                {getStatusIcon(debugState.socketConnection)} Socket Connection
+              </div>
+              <div>
+                {getStatusIcon(debugState.networkConnectivity)} Network
+                Connectivity
+              </div>
+              <div>
+                {getStatusIcon(debugState.webrtcInitialized)} WebRTC Initialized
+              </div>
+              <div>
+                {getStatusIcon(debugState.connectionStateSet)} Connection State
+                Set
+              </div>
+            </div>
+          </div>
+
+          {/* Media Tests */}
+          <div>
+            <h4 className="text-yellow-400 font-bold mb-2">🎥 Media Tests</h4>
+            <div className="space-y-1">
+              <div>
+                {getStatusIcon(debugState.cameraPermission)} Camera Permission
+              </div>
+              <div>
+                {getStatusIcon(debugState.microphonePermission)} Microphone
+                Permission
+              </div>
+              <div>
+                {getStatusIcon(debugState.deviceAvailability)} Device
+                Availability
+              </div>
+              <div>
+                {getStatusIcon(debugState.localStreamInitialized)} Local Stream
+                Initialized
+              </div>
+              <div>
+                {getStatusIcon(debugState.mediaConstraintsSet)} Media
+                Constraints Set
+              </div>
+            </div>
+          </div>
+
+          {/* UI Tests */}
+          <div>
+            <h4 className="text-yellow-400 font-bold mb-2">🎛️ UI Tests</h4>
+            <div className="space-y-1">
+              <div>
+                {getStatusIcon(debugState.startButtonVisible)} START Button
+                Visible
+              </div>
+              <div>
+                {getStatusIcon(!debugState.startButtonDisabled)} START Button
+                Enabled
+              </div>
+              <div>
+                {getStatusIcon(debugState.nextButtonHidden)} NEXT Button Hidden
+              </div>
+              <div>
+                {getStatusIcon(debugState.stopButtonHidden)} STOP Button Hidden
+              </div>
+              <div>
+                {getStatusIcon(debugState.videoFramesCleared)} Video Frames
+                Cleared
+              </div>
+              <div>{getStatusIcon(debugState.statesReset)} States Reset</div>
+            </div>
+          </div>
+
+          {/* Overall Status */}
+          <div className="pt-2 border-t border-blue-700">
+            <div className="text-lg">
+              Phase 1 Complete: {allComplete ? "✔" : "❌"}
+            </div>
+            <div className="text-sm mt-2">
+              Progress: {Object.values(debugState).filter(Boolean).length}/15
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
