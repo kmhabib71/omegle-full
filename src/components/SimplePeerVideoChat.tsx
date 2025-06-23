@@ -25,6 +25,14 @@ interface MediaDeviceStatus {
   };
 }
 
+// Add message interface
+interface Message {
+  id: string;
+  text: string;
+  sender: "me" | "partner";
+  timestamp: number;
+}
+
 interface SimplePeerVideoChatProps {
   session?: any;
 }
@@ -37,6 +45,7 @@ export default function SimplePeerVideoChat({
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const chatMessagesRef = useRef<HTMLDivElement>(null);
 
   const [connectionState, setConnectionState] = useState<ConnectionState>({
     socket: "disconnected",
@@ -59,52 +68,153 @@ export default function SimplePeerVideoChat({
   const [disconnectionMessage, setDisconnectionMessage] = useState<
     string | null
   >(null);
+  const [showDisconnectionAlert, setShowDisconnectionAlert] = useState(false);
+
+  // Add message state
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [currentMessage, setCurrentMessage] = useState("");
+
+  // Add message functions
+  const addMessage = useCallback((text: string, sender: "me" | "partner") => {
+    const newMessage: Message = {
+      id: Date.now().toString(),
+      text,
+      sender,
+      timestamp: Date.now(),
+    };
+    setMessages((prev) => [...prev, newMessage]);
+
+    // Auto-scroll to bottom
+    setTimeout(() => {
+      if (chatMessagesRef.current) {
+        chatMessagesRef.current.scrollTop =
+          chatMessagesRef.current.scrollHeight;
+      }
+    }, 100);
+  }, []);
+
+  const sendMessage = useCallback(() => {
+    if (
+      !currentMessage.trim() ||
+      !peerRef.current ||
+      connectionState.peer !== "connected"
+    ) {
+      return;
+    }
+
+    try {
+      // Send message through SimplePeer data channel
+      peerRef.current.send(
+        JSON.stringify({
+          type: "chat-message",
+          text: currentMessage.trim(),
+        })
+      );
+
+      // Add to our own message list
+      addMessage(currentMessage.trim(), "me");
+      setCurrentMessage("");
+    } catch (error) {
+      console.error("Failed to send message:", error);
+    }
+  }, [currentMessage, connectionState.peer, addMessage]);
+
+  const clearMessages = useCallback(() => {
+    setMessages([]);
+    setCurrentMessage("");
+  }, []);
 
   // Phase 6: Partner Disconnection Handler
-  const handlePartnerDisconnection = useCallback((reason: string) => {
-    console.log("🔌 Phase 6: Handling partner disconnection -", reason);
+  const handlePartnerDisconnection = useCallback(
+    (reason: string, skipAutoSearch: boolean = false) => {
+      console.log("🔌 Phase 6: Handling partner disconnection -", reason);
 
-    // 1. Disconnection Detection - Clean up connection resources
-    if (peerRef.current) {
-      console.log("✅ Cleaning up SimplePeer connection resources");
-      peerRef.current.destroy();
-      peerRef.current = null;
-    }
+      // 🚨 ENHANCED: Show both browser alert and visual modal for immediate user notification
+      if (typeof window !== "undefined") {
+        alert(
+          `⚠️ Partner Disconnected!\n\n${reason}\n\n${
+            skipAutoSearch
+              ? "Click START to find a new stranger."
+              : "Looking for a new stranger..."
+          }`
+        );
+      }
 
-    // Clear partner video immediately
-    if (remoteVideoRef.current) {
-      console.log("✅ Clearing partner video immediately");
-      remoteVideoRef.current.srcObject = null;
-    }
+      // Show visual disconnection alert modal
+      setShowDisconnectionAlert(true);
+      setTimeout(() => {
+        setShowDisconnectionAlert(false);
+      }, 4000);
 
-    // 2. Auto-Search Activation - Automatically re-enter matching queue
-    console.log("✅ Auto-search activation - re-entering matching queue");
-    setPartnerId(null);
-    setSessionId(null);
-    setIsLookingForPartner(true);
-    setDisconnectionMessage(`${reason} - Looking for new stranger...`);
+      // 1. Disconnection Detection - Clean up connection resources
+      if (peerRef.current) {
+        console.log("✅ Cleaning up SimplePeer connection resources");
+        peerRef.current.destroy();
+        peerRef.current = null;
+      }
 
-    // Update connection status
-    setConnectionState((prev) => ({
-      ...prev,
-      peer: "not_initialized",
-      queue: "searching",
-    }));
+      // Clear partner video immediately
+      if (remoteVideoRef.current) {
+        console.log("✅ Clearing partner video immediately");
+        remoteVideoRef.current.srcObject = null;
+      }
 
-    // Start new search automatically
-    if (socketRef.current?.connected) {
-      socketRef.current.emit("find-partner", [], (response: any) => {
-        console.log("📨 Auto-search find-partner response:", response);
-      });
-    }
+      // Clear chat messages
+      clearMessages();
 
-    // Clear disconnection message after 3 seconds
-    setTimeout(() => {
-      setDisconnectionMessage(null);
-    }, 3000);
+      // 2. Auto-Search Activation - Conditionally re-enter matching queue
+      setPartnerId(null);
+      setSessionId(null);
 
-    console.log("✅ Phase 6 complete: Auto-search activated, UI updated");
-  }, []);
+      if (!skipAutoSearch) {
+        console.log("✅ Auto-search activation - re-entering matching queue");
+        setIsLookingForPartner(true);
+        setDisconnectionMessage(`${reason} - Looking for new stranger...`);
+
+        // Update connection status
+        setConnectionState((prev) => ({
+          ...prev,
+          peer: "not_initialized",
+          queue: "searching",
+        }));
+
+        // Start new search automatically with a small delay to prevent cascade
+        setTimeout(() => {
+          if (socketRef.current?.connected) {
+            socketRef.current.emit("find-partner", [], (response: any) => {
+              console.log("📨 Auto-search find-partner response:", response);
+            });
+          }
+        }, 1000);
+
+        // Clear disconnection message after 5 seconds
+        setTimeout(() => {
+          setDisconnectionMessage(null);
+        }, 5000);
+      } else {
+        console.log("⏸️ Skipping auto-search to prevent cascade");
+        setIsLookingForPartner(false);
+        setDisconnectionMessage(
+          `${reason} - Click START to find a new stranger.`
+        );
+
+        // Update connection status to idle
+        setConnectionState((prev) => ({
+          ...prev,
+          peer: "not_initialized",
+          queue: "not_in_queue",
+        }));
+
+        // Clear message after longer delay
+        setTimeout(() => {
+          setDisconnectionMessage(null);
+        }, 8000);
+      }
+
+      console.log("✅ Phase 6 complete: Disconnection handled");
+    },
+    [clearMessages]
+  );
 
   const initializeSocket = useCallback(() => {
     console.log("🔌 Initializing socket connection...");
@@ -148,9 +258,14 @@ export default function SimplePeerVideoChat({
     });
 
     // Phase 6: Partner Disconnection Handling
-    socketRef.current.on("partner-disconnected", () => {
-      console.log("🔌 Phase 6: Partner disconnected - handling disconnection");
-      handlePartnerDisconnection("Partner disconnected");
+    socketRef.current.on("partner-disconnected", (data) => {
+      console.log(
+        "🔌 Phase 6: Partner disconnected - handling disconnection",
+        data
+      );
+      const skipAutoSearch = data?.skipAutoSearch || false;
+      const reason = data?.reason || "Partner disconnected";
+      handlePartnerDisconnection(reason, skipAutoSearch);
     });
 
     setConnectionState((prev) => ({ ...prev, socket: "connecting" }));
@@ -228,12 +343,24 @@ export default function SimplePeerVideoChat({
         }
       });
 
+      // Handle incoming data (text messages)
+      peerRef.current.on("data", (data) => {
+        try {
+          const message = JSON.parse(data.toString());
+          if (message.type === "chat-message") {
+            addMessage(message.text, "partner");
+          }
+        } catch (error) {
+          console.error("Failed to parse incoming message:", error);
+        }
+      });
+
       peerRef.current.on("error", (err) => {
         console.error("❌ SimplePeer error:", err);
         setConnectionState((prev) => ({ ...prev, peer: "failed" }));
         // Phase 6: Handle unexpected disconnections
         if (partnerId) {
-          handlePartnerDisconnection("Connection error occurred");
+          handlePartnerDisconnection("Connection error occurred", false);
         }
       });
 
@@ -242,13 +369,13 @@ export default function SimplePeerVideoChat({
         setConnectionState((prev) => ({ ...prev, peer: "not_initialized" }));
         // Phase 6: Handle WebRTC connection closure
         if (partnerId) {
-          handlePartnerDisconnection("Connection closed");
+          handlePartnerDisconnection("Connection closed", false);
         }
       });
 
       setConnectionState((prev) => ({ ...prev, peer: "connecting" }));
     },
-    []
+    [addMessage]
   );
 
   const initializeMedia = useCallback(async () => {
@@ -320,6 +447,9 @@ export default function SimplePeerVideoChat({
     // Log session end (in a real app, this would log to database)
     console.log("✅ Logging session end for partner:", partnerId);
 
+    // Clear chat messages
+    clearMessages();
+
     // Re-queue Process
     setPartnerId(null);
     setSessionId(null);
@@ -343,7 +473,7 @@ export default function SimplePeerVideoChat({
     console.log(
       "✅ Button state updated: NEXT hidden, STOP enabled, searching indicator shown"
     );
-  }, [partnerId]);
+  }, [partnerId, clearMessages]);
 
   // Phase 5B: STOP Button Click (Complete Termination)
   const stopSession = useCallback(() => {
@@ -379,10 +509,11 @@ export default function SimplePeerVideoChat({
       queue: "not_in_queue",
     }));
 
-    // Clear chat messages (if we had chat state, we'd clear it here)
+    // Clear chat messages
+    clearMessages();
     console.log("✅ Session completely terminated - UI reset to initial state");
     console.log("✅ START button will show, NEXT and STOP buttons hidden");
-  }, []);
+  }, [clearMessages]);
 
   useEffect(() => {
     initializeSocket();
@@ -468,7 +599,24 @@ export default function SimplePeerVideoChat({
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+        {/* 🚨 ENHANCED: Modal-style Disconnection Alert */}
+        {showDisconnectionAlert && (
+          <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+            <div className="bg-red-600 text-white p-8 rounded-xl shadow-2xl max-w-md w-full mx-4 text-center animate-pulse">
+              <div className="text-6xl mb-4">⚠️</div>
+              <h2 className="text-2xl font-bold mb-4">Partner Disconnected!</h2>
+              <p className="text-lg mb-4">Your partner has left the chat.</p>
+              <p className="text-md">
+                Automatically searching for a new stranger...
+              </p>
+              <div className="mt-6">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto"></div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
           <div className="bg-gray-800 rounded-lg p-4">
             <h3 className="text-lg font-semibold mb-3">You</h3>
             <video
@@ -498,6 +646,79 @@ export default function SimplePeerVideoChat({
               {partnerId
                 ? `Connected to: ${partnerId}`
                 : "No partner connected"}
+            </div>
+          </div>
+
+          {/* Chat Section */}
+          <div className="bg-gray-800 rounded-lg p-4">
+            <h3 className="text-lg font-semibold mb-3">
+              {isConnected ? "Chat" : "Chat (Connect to enable)"}
+            </h3>
+            <div
+              ref={chatMessagesRef}
+              className="h-64 bg-gray-700 rounded-lg p-3 mb-3 overflow-y-auto"
+            >
+              {messages.length === 0 ? (
+                <div className="text-gray-400 text-sm text-center mt-24">
+                  {isConnected
+                    ? "No messages yet. Start chatting!"
+                    : "Connect with a partner to start chatting"}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {messages.map((message) => (
+                    <div
+                      key={message.id}
+                      className={`flex ${
+                        message.sender === "me"
+                          ? "justify-end"
+                          : "justify-start"
+                      }`}
+                    >
+                      <div
+                        className={`max-w-xs px-3 py-2 rounded-lg text-sm ${
+                          message.sender === "me"
+                            ? "bg-blue-600 text-white"
+                            : "bg-gray-600 text-white"
+                        }`}
+                      >
+                        <div className="break-words">{message.text}</div>
+                        <div className="text-xs opacity-70 mt-1">
+                          {new Date(message.timestamp).toLocaleTimeString([], {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={currentMessage}
+                onChange={(e) => setCurrentMessage(e.target.value)}
+                onKeyPress={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                  }
+                }}
+                placeholder={
+                  isConnected ? "Type your message..." : "Connect to chat"
+                }
+                disabled={!isConnected}
+                className="flex-1 px-3 py-2 bg-gray-700 text-white rounded-lg border border-gray-600 focus:border-blue-500 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+              />
+              <button
+                onClick={sendMessage}
+                disabled={!isConnected || !currentMessage.trim()}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg font-semibold transition-colors"
+              >
+                Send
+              </button>
             </div>
           </div>
         </div>

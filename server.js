@@ -3,7 +3,7 @@ const { Server } = require("socket.io");
 
 // Store for managing users and their connections
 const users = new Map();
-const waitingUsers = new Map(); // interests -> user IDs
+const waitingUsers = new Map(); // interests -> array of {userId, timestamp} objects for FIFO ordering
 
 // Create HTTP server
 const httpServer = createServer((req, res) => {
@@ -77,6 +77,43 @@ io.on("connection", (socket) => {
         timestamp: Date.now(),
       });
     }
+
+    // 🔧 FIX: Check if user is already connected to someone (NEXT button scenario)
+    const existingUser = users.get(socket.id);
+    if (existingUser && existingUser.partnerId && existingUser.inCall) {
+      console.log(
+        "🔄 User clicking NEXT - disconnecting current partner:",
+        existingUser.partnerId
+      );
+
+      const currentPartnerId = existingUser.partnerId;
+      const currentPartner = users.get(currentPartnerId);
+
+      // 🚨 ATOMIC DISCONNECTION: Reset both users' states simultaneously to prevent cascade
+      existingUser.inCall = false;
+      existingUser.partnerId = undefined;
+
+      if (currentPartner) {
+        currentPartner.inCall = false;
+        currentPartner.partnerId = undefined;
+
+        // Only notify partner if they're still connected to this user (prevent double notifications)
+        if (
+          currentPartner.partnerId === socket.id ||
+          !currentPartner.partnerId
+        ) {
+          io.to(currentPartnerId).emit("partner-disconnected", {
+            skipAutoSearch: false,
+            reason: "Partner clicked NEXT",
+          });
+          console.log(
+            "✅ Partner notified about disconnection (auto-search enabled):",
+            currentPartnerId
+          );
+        }
+      }
+    }
+
     console.log("📊 Current users before join:", Array.from(users.keys()));
     console.log(
       "📊 Current users data before join:",
@@ -115,7 +152,10 @@ io.on("connection", (socket) => {
         if (partner) {
           partner.inCall = false;
           partner.partnerId = undefined;
-          io.to(user.partnerId).emit("partner-disconnected");
+          io.to(user.partnerId).emit("partner-disconnected", {
+            skipAutoSearch: false,
+            reason: "Partner clicked NEXT",
+          });
         }
       }
 
@@ -152,7 +192,10 @@ io.on("connection", (socket) => {
       if (partner) {
         partner.inCall = false;
         partner.partnerId = undefined;
-        io.to(user.partnerId).emit("partner-disconnected");
+        io.to(user.partnerId).emit("partner-disconnected", {
+          skipAutoSearch: false,
+          reason: "Partner manually disconnected",
+        });
       }
       user.inCall = false;
       user.partnerId = undefined;
@@ -168,7 +211,10 @@ io.on("connection", (socket) => {
       if (partner) {
         partner.inCall = false;
         partner.partnerId = undefined;
-        io.to(user.partnerId).emit("partner-disconnected");
+        io.to(user.partnerId).emit("partner-disconnected", {
+          skipAutoSearch: true,
+          reason: "Partner stopped the chat",
+        });
       }
       user.inCall = false;
       user.partnerId = undefined;
@@ -369,7 +415,11 @@ io.on("connection", (socket) => {
         if (partner) {
           partner.inCall = false;
           partner.partnerId = undefined;
-          io.to(user.partnerId).emit("partner-disconnected");
+          // Don't skip auto-search for unexpected disconnections (user closes browser, network issues, etc.)
+          io.to(user.partnerId).emit("partner-disconnected", {
+            skipAutoSearch: false,
+            reason: "Partner disconnected unexpectedly",
+          });
         }
       }
 
@@ -462,19 +512,11 @@ function findMatch(userId, interests) {
       .map((u) => u.id)
   );
 
-  // FIRST: Try immediate random matching with any available user
-  console.log("🎯 Trying immediate random matching...");
-  for (const [otherUserId, otherUser] of users.entries()) {
-    if (otherUserId !== userId && !otherUser.inCall) {
-      console.log("✔ Found available partner:", otherUserId);
-      createMatch(userId, otherUserId);
-      return;
-    }
-  }
+  // 🚀 FIFO QUEUE SYSTEM: Try to find someone from waiting lists FIRST (First In, First Out)
 
-  // SECOND: Try to find someone with matching interests (if both have interests)
+  // FIRST: Try to find someone with matching interests (if both have interests)
   if (interests.length > 0) {
-    console.log("🔍 Trying interest-based matching...");
+    console.log("🔍 Trying interest-based FIFO matching...");
     for (const interest of interests) {
       const waitingList = waitingUsers.get(interest) || [];
       const availableUsers = waitingList.filter((id) => {
@@ -483,16 +525,16 @@ function findMatch(userId, interests) {
       });
 
       if (availableUsers.length > 0) {
-        const partnerId = availableUsers[0];
-        console.log("✔ Found interest-based partner:", partnerId);
+        const partnerId = availableUsers[0]; // FIFO: First in queue gets matched
+        console.log("✔ Found interest-based FIFO partner:", partnerId);
         createMatch(userId, partnerId);
         return;
       }
     }
   }
 
-  // THIRD: Check general waiting list for users without interests
-  console.log("🔍 Checking general waiting list...");
+  // SECOND: Check general waiting list for users without interests (FIFO)
+  console.log("🔍 Checking general waiting list (FIFO)...");
   const generalWaitingList = waitingUsers.get("general") || [];
   const availableGeneralUsers = generalWaitingList.filter((id) => {
     const otherUser = users.get(id);
@@ -500,14 +542,26 @@ function findMatch(userId, interests) {
   });
 
   if (availableGeneralUsers.length > 0) {
-    const partnerId = availableGeneralUsers[0];
-    console.log("✔ Found general partner:", partnerId);
+    const partnerId = availableGeneralUsers[0]; // FIFO: First in queue gets matched
+    console.log("✔ Found general FIFO partner:", partnerId);
     createMatch(userId, partnerId);
     return;
   }
 
+  // THIRD: Only if no one is waiting, try to match with any available user
+  console.log(
+    "🎯 No one in queues, trying immediate matching with available users..."
+  );
+  for (const [otherUserId, otherUser] of users.entries()) {
+    if (otherUserId !== userId && !otherUser.inCall) {
+      console.log("✔ Found available partner (no queue):", otherUserId);
+      createMatch(userId, otherUserId);
+      return;
+    }
+  }
+
   // FOURTH: No match found, add to appropriate waiting list
-  console.log("⏳ No immediate match found, adding to waiting list...");
+  console.log("⏳ No match found, adding to waiting list...");
 
   if (interests.length > 0) {
     // Add to interest-specific waiting lists
