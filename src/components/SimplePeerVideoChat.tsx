@@ -237,14 +237,75 @@ export default function SimplePeerVideoChat({
     });
   }, []);
 
-  const stopSession = useCallback(() => {
-    console.log("🛑 Stopping current session...");
+  // Phase 5A: NEXT Button Click (Find New Partner)
+  const findNextPartner = useCallback(() => {
+    console.log("🔄 Phase 5A: Finding next partner...");
 
+    // Current Connection Cleanup
     if (peerRef.current) {
+      console.log("✅ Closing SimplePeer connection via destroy()");
       peerRef.current.destroy();
       peerRef.current = null;
     }
 
+    // Clear remote video element
+    if (remoteVideoRef.current) {
+      console.log("✅ Clearing remote video element");
+      remoteVideoRef.current.srcObject = null;
+    }
+
+    // Log session end (in a real app, this would log to database)
+    console.log("✅ Logging session end for partner:", partnerId);
+
+    // Re-queue Process
+    setPartnerId(null);
+    setSessionId(null);
+    setConnectionState((prev) => ({
+      ...prev,
+      peer: "not_initialized",
+      queue: "searching", // Update UI to "searching" state
+    }));
+
+    // Add user back to matching queue & Start new matching process
+    console.log("✅ Adding user back to matching queue");
+    setIsLookingForPartner(true);
+
+    if (socketRef.current?.connected) {
+      socketRef.current.emit("find-partner", [], (response: any) => {
+        console.log("📨 Re-queue find-partner response:", response);
+      });
+    }
+
+    // Button State Management happens automatically via state changes
+    console.log(
+      "✅ Button state updated: NEXT hidden, STOP enabled, searching indicator shown"
+    );
+  }, [partnerId]);
+
+  // Phase 5B: STOP Button Click (Complete Termination)
+  const stopSession = useCallback(() => {
+    console.log("🛑 Phase 5B: Complete session termination...");
+
+    // Complete Cleanup
+    if (peerRef.current) {
+      console.log("✅ Closing SimplePeer connection");
+      peerRef.current.destroy();
+      peerRef.current = null;
+    }
+
+    // Stop all media streams (keep local stream for potential restart)
+    if (remoteVideoRef.current) {
+      console.log("✅ Clearing remote video element");
+      remoteVideoRef.current.srcObject = null;
+    }
+
+    // Remove from matching queue
+    if (socketRef.current?.connected) {
+      console.log("✅ Removing from matching queue");
+      socketRef.current.emit("leave-queue");
+    }
+
+    // UI Reset
     setPartnerId(null);
     setSessionId(null);
     setIsLookingForPartner(false);
@@ -254,9 +315,9 @@ export default function SimplePeerVideoChat({
       queue: "not_in_queue",
     }));
 
-    if (socketRef.current?.connected) {
-      socketRef.current.emit("leave-queue");
-    }
+    // Clear chat messages (if we had chat state, we'd clear it here)
+    console.log("✅ Session completely terminated - UI reset to initial state");
+    console.log("✅ START button will show, NEXT and STOP buttons hidden");
   }, []);
 
   useEffect(() => {
@@ -397,11 +458,7 @@ export default function SimplePeerVideoChat({
             <div className="flex items-center gap-4">
               <span className="text-lg text-green-400">✅ Connected!</span>
               <button
-                onClick={() => {
-                  console.log("🔄 Finding next partner...");
-                  stopSession();
-                  setTimeout(() => startSearch(), 1000);
-                }}
+                onClick={findNextPartner}
                 className="px-6 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold"
               >
                 NEXT
