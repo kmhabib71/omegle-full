@@ -130,21 +130,21 @@ export default function SimplePeerVideoChat({
       console.log("🔌 Phase 6: Handling partner disconnection -", reason);
 
       // 🚨 ENHANCED: Show both browser alert and visual modal for immediate user notification
-      if (typeof window !== "undefined") {
-        alert(
-          `⚠️ Partner Disconnected!\n\n${reason}\n\n${
-            skipAutoSearch
-              ? "Click START to find a new stranger."
-              : "Looking for a new stranger..."
-          }`
-        );
-      }
+      // if (typeof window !== "undefined") {
+      //   alert(
+      //     `⚠️ Partner Disconnected!\n\n${reason}\n\n${
+      //       skipAutoSearch
+      //         ? "Click START to find a new stranger."
+      //         : "Looking for a new stranger..."
+      //     }`
+      //   );
+      // }
 
       // Show visual disconnection alert modal
       setShowDisconnectionAlert(true);
       setTimeout(() => {
         setShowDisconnectionAlert(false);
-      }, 4000);
+      }, 2000);
 
       // 1. Disconnection Detection - Clean up connection resources
       if (peerRef.current) {
@@ -211,7 +211,7 @@ export default function SimplePeerVideoChat({
         }, 8000);
       }
 
-      console.log("✅ Phase 6 complete: Disconnection handled");
+      console.log("✅ Phase 6 complete: Auto-search activated, UI updated");
     },
     [clearMessages]
   );
@@ -492,6 +492,12 @@ export default function SimplePeerVideoChat({
       remoteVideoRef.current.srcObject = null;
     }
 
+    // 🔧 FIX: Notify partner about disconnection BEFORE stopping
+    if (partnerId && socketRef.current?.connected) {
+      console.log("✅ Notifying partner about STOP disconnection");
+      socketRef.current.emit("stopChat");
+    }
+
     // Remove from matching queue
     if (socketRef.current?.connected) {
       console.log("✅ Removing from matching queue");
@@ -513,7 +519,7 @@ export default function SimplePeerVideoChat({
     clearMessages();
     console.log("✅ Session completely terminated - UI reset to initial state");
     console.log("✅ START button will show, NEXT and STOP buttons hidden");
-  }, [clearMessages]);
+  }, [partnerId, clearMessages]);
 
   useEffect(() => {
     initializeSocket();

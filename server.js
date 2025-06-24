@@ -212,7 +212,7 @@ io.on("connection", (socket) => {
         partner.inCall = false;
         partner.partnerId = undefined;
         io.to(user.partnerId).emit("partner-disconnected", {
-          skipAutoSearch: true,
+          skipAutoSearch: false,
           reason: "Partner stopped the chat",
         });
       }
