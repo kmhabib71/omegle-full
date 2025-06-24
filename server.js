@@ -3,7 +3,8 @@ const { Server } = require("socket.io");
 
 // Store for managing users and their connections
 const users = new Map();
-const waitingUsers = new Map(); // interests -> array of {userId, timestamp} objects for FIFO ordering
+const waitingUsers = new Map(); // interests -> user IDs
+const recentPartners = new Map(); // userId -> Set of recent partner IDs to prevent immediate re-matching
 
 // Create HTTP server
 const httpServer = createServer((req, res) => {
@@ -124,11 +125,18 @@ io.on("connection", (socket) => {
       console.log(`  ${key}: [${userIds.join(", ")}]`);
     });
 
+    // Reset manual stop flag when user starts finding partner
+    const existingUserData = users.get(socket.id);
     users.set(socket.id, {
       id: socket.id,
       interests,
       inCall: false,
+      manualStop: false, // Reset manual stop flag when actively finding partner
     });
+
+    if (existingUserData && existingUserData.manualStop) {
+      console.log("🟢 Manual stop flag reset for:", socket.id);
+    }
 
     console.log("📊 Current users after join:", Array.from(users.keys()));
     console.log(
@@ -218,6 +226,18 @@ io.on("connection", (socket) => {
       }
       user.inCall = false;
       user.partnerId = undefined;
+      // 🚨 FIXED: Set manual stop flag for 30 seconds only
+      user.manualStop = true;
+      console.log("🛑 Manual stop flag set for 30 seconds:", socket.id);
+
+      // Auto-reset manualStop after 30 seconds
+      setTimeout(() => {
+        const currentUser = users.get(socket.id);
+        if (currentUser && currentUser.manualStop) {
+          currentUser.manualStop = false;
+          console.log("🟢 Manual stop flag auto-reset for:", socket.id);
+        }
+      }, 30000);
     }
     socket.emit("chat-stopped");
   });
@@ -500,99 +520,157 @@ io.on("connection", (socket) => {
 });
 
 function findMatch(userId, interests) {
-  const user = users.get(userId);
-  if (!user || user.inCall) return;
+  console.log(`🔍 Finding match for user ${userId} with interests:`, interests);
 
-  console.log("🔍 Finding match for:", userId, "with interests:", interests);
+  // 🚨 DEBUG: Log current state
   console.log("📊 Current users:", Array.from(users.keys()));
-  console.log(
-    "📊 Users in call:",
-    Array.from(users.values())
-      .filter((u) => u.inCall)
-      .map((u) => u.id)
-  );
+  console.log("📊 Current waitingUsers:", Array.from(waitingUsers.entries()));
+  console.log("📊 Recent partners:", Array.from(recentPartners.entries()));
 
-  // 🚀 FIFO QUEUE SYSTEM: Try to find someone from waiting lists FIRST (First In, First Out)
-
-  // FIRST: Try to find someone with matching interests (if both have interests)
-  if (interests.length > 0) {
-    console.log("🔍 Trying interest-based FIFO matching...");
-    for (const interest of interests) {
-      const waitingList = waitingUsers.get(interest) || [];
-      const availableUsers = waitingList.filter((id) => {
-        const otherUser = users.get(id);
-        return otherUser && !otherUser.inCall && id !== userId;
-      });
-
-      if (availableUsers.length > 0) {
-        const partnerId = availableUsers[0]; // FIFO: First in queue gets matched
-        console.log("✔ Found interest-based FIFO partner:", partnerId);
-        createMatch(userId, partnerId);
-        return;
-      }
-    }
-  }
-
-  // SECOND: Check general waiting list for users without interests (FIFO)
-  console.log("🔍 Checking general waiting list (FIFO)...");
-  const generalWaitingList = waitingUsers.get("general") || [];
-  const availableGeneralUsers = generalWaitingList.filter((id) => {
-    const otherUser = users.get(id);
-    return otherUser && !otherUser.inCall && id !== userId;
+  // Check users status
+  users.forEach((user, id) => {
+    console.log(
+      `👤 User ${id}: inCall=${user.inCall}, manualStop=${user.manualStop}, partnerId=${user.partnerId}`
+    );
   });
 
-  if (availableGeneralUsers.length > 0) {
-    const partnerId = availableGeneralUsers[0]; // FIFO: First in queue gets matched
-    console.log("✔ Found general FIFO partner:", partnerId);
-    createMatch(userId, partnerId);
-    return;
-  }
+  // ✅ FIXED: Use First In, First Out (FIFO) ordering for fair matching
+  // 1️⃣ Try to match with waiting users having same interests (FIFO order)
+  for (const [interestKey, userArray] of waitingUsers.entries()) {
+    if (interestKey === interests.join(",") && userArray.length > 0) {
+      console.log(`🔍 Checking interest-based matches for key: ${interestKey}`);
+      for (let i = 0; i < userArray.length; i++) {
+        const potentialMatch = userArray[i];
+        const potentialMatchId = potentialMatch.userId || potentialMatch; // Handle both object and string
+        console.log(`🔍 Checking potential match: ${potentialMatchId}`);
 
-  // THIRD: Only if no one is waiting, try to match with any available user
-  console.log(
-    "🎯 No one in queues, trying immediate matching with available users..."
-  );
-  for (const [otherUserId, otherUser] of users.entries()) {
-    if (otherUserId !== userId && !otherUser.inCall) {
-      console.log("✔ Found available partner (no queue):", otherUserId);
-      createMatch(userId, otherUserId);
-      return;
-    }
-  }
-
-  // FOURTH: No match found, add to appropriate waiting list
-  console.log("⏳ No match found, adding to waiting list...");
-
-  if (interests.length > 0) {
-    // Add to interest-specific waiting lists
-    for (const interest of interests) {
-      if (!waitingUsers.has(interest)) {
-        waitingUsers.set(interest, []);
+        // 🚨 NEW: Skip if recently connected or in manual stop
+        if (
+          potentialMatchId !== userId &&
+          users.has(potentialMatchId) &&
+          !users.get(potentialMatchId).inCall &&
+          !users.get(potentialMatchId).manualStop &&
+          !wereRecentlyConnected(userId, potentialMatchId)
+        ) {
+          console.log(
+            `✅ Found interest-based match: ${userId} ↔ ${potentialMatchId}`
+          );
+          // Remove from waiting queue
+          userArray.splice(i, 1);
+          if (userArray.length === 0) {
+            waitingUsers.delete(interestKey);
+          }
+          createMatch(userId, potentialMatchId);
+          return potentialMatchId;
+        } else {
+          console.log(
+            `❌ Skipping ${potentialMatchId}: inCall=${
+              users.get(potentialMatchId)?.inCall
+            }, manualStop=${
+              users.get(potentialMatchId)?.manualStop
+            }, recentlyConnected=${wereRecentlyConnected(
+              userId,
+              potentialMatchId
+            )}`
+          );
+        }
       }
-      if (!waitingUsers.get(interest).includes(userId)) {
-        waitingUsers.get(interest).push(userId);
-      }
     }
-    console.log("📝 Added to interest waiting lists:", interests);
-  } else {
-    // Add to general waiting list
-    if (!waitingUsers.has("general")) {
-      waitingUsers.set("general", []);
-    }
-    if (!waitingUsers.get("general").includes(userId)) {
-      waitingUsers.get("general").push(userId);
-    }
-    console.log("📝 Added to general waiting list");
   }
 
-  // Log current waiting lists for debugging
-  console.log("📊 Current waiting lists:");
-  waitingUsers.forEach((userIds, key) => {
-    console.log(`  ${key}: [${userIds.join(", ")}]`);
+  // 2️⃣ Try to match with general waiting users (FIFO order)
+  if (waitingUsers.has("general") && waitingUsers.get("general").length > 0) {
+    console.log(`🔍 Checking general queue matches`);
+    const generalUsers = waitingUsers.get("general");
+    for (let i = 0; i < generalUsers.length; i++) {
+      const potentialMatch = generalUsers[i];
+      const potentialMatchId = potentialMatch.userId || potentialMatch; // Handle both object and string
+      console.log(`🔍 Checking general potential match: ${potentialMatchId}`);
+
+      // 🚨 NEW: Skip if recently connected or in manual stop
+      if (
+        potentialMatchId !== userId &&
+        users.has(potentialMatchId) &&
+        !users.get(potentialMatchId).inCall &&
+        !users.get(potentialMatchId).manualStop &&
+        !wereRecentlyConnected(userId, potentialMatchId)
+      ) {
+        console.log(
+          `✅ Found general queue match: ${userId} ↔ ${potentialMatchId}`
+        );
+        // Remove from waiting queue
+        generalUsers.splice(i, 1);
+        if (generalUsers.length === 0) {
+          waitingUsers.delete("general");
+        }
+        createMatch(userId, potentialMatchId);
+        return potentialMatchId;
+      } else {
+        console.log(
+          `❌ Skipping general ${potentialMatchId}: inCall=${
+            users.get(potentialMatchId)?.inCall
+          }, manualStop=${
+            users.get(potentialMatchId)?.manualStop
+          }, recentlyConnected=${wereRecentlyConnected(
+            userId,
+            potentialMatchId
+          )}`
+        );
+      }
+    }
+  }
+
+  // 3️⃣ Try immediate matching with any available user (only if no queue exists)
+  let hasAnyWaitingUsers = false;
+  for (const [key, userArray] of waitingUsers.entries()) {
+    if (userArray.length > 0) {
+      hasAnyWaitingUsers = true;
+      break;
+    }
+  }
+
+  if (!hasAnyWaitingUsers) {
+    console.log(`🔍 No waiting users, trying immediate matching`);
+    for (const [candidateId, candidate] of users.entries()) {
+      console.log(`🔍 Checking immediate candidate: ${candidateId}`);
+      // 🚨 NEW: Skip if recently connected or in manual stop
+      if (
+        candidateId !== userId &&
+        !candidate.inCall &&
+        !candidate.manualStop &&
+        !wereRecentlyConnected(userId, candidateId)
+      ) {
+        console.log(`✅ Found immediate match: ${userId} ↔ ${candidateId}`);
+        createMatch(userId, candidateId);
+        return candidateId;
+      } else {
+        console.log(
+          `❌ Skipping immediate ${candidateId}: inCall=${
+            candidate.inCall
+          }, manualStop=${
+            candidate.manualStop
+          }, recentlyConnected=${wereRecentlyConnected(userId, candidateId)}`
+        );
+      }
+    }
+  }
+
+  console.log(`❌ No match found for user ${userId}. Adding to queue...`);
+
+  // Add to appropriate queue
+  const queueKey = interests.length > 0 ? interests.join(",") : "general";
+  if (!waitingUsers.has(queueKey)) {
+    waitingUsers.set(queueKey, []);
+  }
+
+  // Add user to queue (as object for FIFO)
+  waitingUsers.get(queueKey).push({
+    userId: userId,
+    timestamp: Date.now(),
   });
 
-  // Notify user they're waiting
-  io.to(userId).emit("waiting");
+  console.log(`📝 Added ${userId} to ${queueKey} queue`);
+  return null;
 }
 
 function createMatch(userId1, userId2) {
@@ -611,11 +689,17 @@ function createMatch(userId1, userId2) {
 
   console.log("🤝 Creating match between:", userId1, "and", userId2);
 
+  // 🚨 NEW: Add recent partner tracking
+  addRecentPartner(userId1, userId2);
+  addRecentPartner(userId2, userId1);
+
   // Set up the match
   user1.inCall = true;
   user1.partnerId = userId2;
+  user1.manualStop = false; // Reset manual stop flag when in call
   user2.inCall = true;
   user2.partnerId = userId1;
+  user2.manualStop = false; // Reset manual stop flag when in call
 
   // Remove from waiting lists
   let removedFromLists = 0;
@@ -674,6 +758,29 @@ function createMatch(userId1, userId2) {
   });
 
   console.log("✅ Match created successfully!");
+}
+
+// Function to add recent partner with cleanup after 30 seconds
+function addRecentPartner(userId, partnerId) {
+  if (!recentPartners.has(userId)) {
+    recentPartners.set(userId, new Set());
+  }
+  recentPartners.get(userId).add(partnerId);
+
+  // Clean up after 30 seconds
+  setTimeout(() => {
+    if (recentPartners.has(userId)) {
+      recentPartners.get(userId).delete(partnerId);
+    }
+  }, 30000);
+}
+
+// Function to check if two users were recently connected
+function wereRecentlyConnected(userId1, userId2) {
+  return (
+    (recentPartners.has(userId1) && recentPartners.get(userId1).has(userId2)) ||
+    (recentPartners.has(userId2) && recentPartners.get(userId2).has(userId1))
+  );
 }
 
 const PORT = process.env.PORT || 3001;
