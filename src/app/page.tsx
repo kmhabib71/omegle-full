@@ -10,7 +10,7 @@ export default function Home() {
   const { data: session, status } = useSession();
   const router = useRouter();
 
-  const handleStartChat = (chatType: "text" | "video") => {
+  const handleStartChat = (chatType: "text" | "video" | "voice") => {
     if (session) {
       router.push(`/${chatType}-chat`);
     } else {
@@ -181,20 +181,27 @@ export default function Home() {
               <h2 className="text-lg font-semibold text-black">
                 Start chatting:
               </h2>
-              <div className="flex items-center space-x-3">
-                <button
-                  onClick={() => handleStartChat("text")}
-                  className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 px-4 rounded-lg transition-colors text-base chat-button"
-                >
-                  Text
-                </button>
-                <div className="text-gray-500 text-sm">or</div>
-                <button
-                  onClick={() => handleStartChat("video")}
-                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors text-base chat-button"
-                >
-                  Video
-                </button>
+              <div className="flex flex-col space-y-2">
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => handleStartChat("text")}
+                    className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 px-3 rounded-lg transition-colors text-sm chat-button"
+                  >
+                    💬 Text
+                  </button>
+                  <button
+                    onClick={() => handleStartChat("voice")}
+                    className="flex-1 bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-3 rounded-lg transition-colors text-sm chat-button"
+                  >
+                    🎤 Voice
+                  </button>
+                  <button
+                    onClick={() => handleStartChat("video")}
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-3 rounded-lg transition-colors text-sm chat-button"
+                  >
+                    📹 Video
+                  </button>
+                </div>
               </div>
 
               {!session && (
