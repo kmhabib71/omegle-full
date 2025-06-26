@@ -10,6 +10,7 @@ import SimplePeerVideoChat from "@/components/SimplePeerVideoChat";
 import SimplePeerVoiceChat from "@/components/SimplePeerVoiceChat";
 import SimplePeerTextChat from "@/components/SimplePeerTextChat";
 import UserProfileModal from "@/components/UserProfileModal";
+import { PreferenceModals } from "@/components/PreferenceModals";
 
 export default function Home() {
   const { data: session, status } = useSession();
@@ -395,26 +396,10 @@ export default function Home() {
 
   const handleGenderChange = (gender: string) => {
     setMatchPreferences((prev) => ({ ...prev, matchGender: gender }));
-    localStorage.setItem("snappairGenderFilter", gender);
-
-    // Save to database if authenticated
-    if (session?.user?.email) {
-      savePreferencesToDatabase({ matchGender: gender });
-    }
   };
 
   const handleCountryChange = (country: string | null) => {
     setMatchPreferences((prev) => ({ ...prev, matchCountry: country }));
-    if (country) {
-      localStorage.setItem("snappairCountryFilter", country);
-    } else {
-      localStorage.removeItem("snappairCountryFilter");
-    }
-
-    // Save to database if authenticated
-    if (session?.user?.email) {
-      savePreferencesToDatabase({ matchCountry: country });
-    }
   };
 
   const handleGameChange = (gameId: string, isSelected: boolean) => {
@@ -429,29 +414,24 @@ export default function Home() {
 
     const finalGames = newGames.length > 0 ? newGames : null;
     setMatchPreferences((prev) => ({ ...prev, matchInterest: finalGames }));
-
-    if (finalGames) {
-      localStorage.setItem(
-        "snappairInterestFilter",
-        JSON.stringify(finalGames)
-      );
-    } else {
-      localStorage.removeItem("snappairInterestFilter");
-    }
-
-    // Save to database if authenticated
-    if (session?.user?.email) {
-      savePreferencesToDatabase({ matchInterest: finalGames });
-    }
   };
 
   const handleClearAllGames = () => {
     setMatchPreferences((prev) => ({ ...prev, matchInterest: null }));
-    localStorage.removeItem("snappairInterestFilter");
+  };
 
-    // Save to database if authenticated
-    if (session?.user?.email) {
-      savePreferencesToDatabase({ matchInterest: null });
+  // Handle closing modals
+  const handleCloseModal = (modalType: "gender" | "country" | "game") => {
+    switch (modalType) {
+      case "gender":
+        setShowGenderModal(false);
+        break;
+      case "country":
+        setShowCountryModal(false);
+        break;
+      case "game":
+        setShowGameModal(false);
+        break;
     }
   };
 
@@ -879,151 +859,20 @@ export default function Home() {
       </div>
       <Footer />
 
-      {/* Modal Overlays */}
-      {showGenderModal && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-          onClick={(e) => handleModalOutsideClick(e, "gender")}
-        >
-          <div className="bg-gray-800 rounded-lg max-w-md w-full mx-4 flex flex-col max-h-[80vh]">
-            <div className="p-6 pb-4">
-              <h3 className="text-lg font-semibold mb-4">
-                Select Gender Preference
-              </h3>
-            </div>
-            <div className="flex-1 overflow-y-auto px-6">
-              <div className="space-y-3">
-                {[
-                  { id: "all", label: "Everyone" },
-                  { id: "male", label: "Male" },
-                  { id: "female", label: "Female" },
-                ].map((option) => (
-                  <button
-                    key={option.id}
-                    onClick={() => handleGenderChange(option.id)}
-                    className={`w-full text-left p-4 rounded-lg cursor-pointer transition-all duration-200 ${
-                      matchPreferences.matchGender === option.id
-                        ? "bg-blue-600 text-white shadow-lg"
-                        : "bg-gray-700 hover:bg-gray-600 text-gray-200"
-                    }`}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="p-6 pt-4 border-t border-gray-700">
-              <button
-                onClick={() => setShowGenderModal(false)}
-                className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-medium transition-colors"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showCountryModal && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-          onClick={(e) => handleModalOutsideClick(e, "country")}
-        >
-          <div className="bg-gray-800 rounded-lg max-w-md w-full mx-4 flex flex-col max-h-[80vh]">
-            <div className="p-6 pb-4">
-              <h3 className="text-lg font-semibold mb-4">
-                Select Location Preference
-              </h3>
-            </div>
-            <div className="flex-1 overflow-y-auto px-6">
-              <div className="space-y-3">
-                {[
-                  { id: null, label: "Worldwide" },
-                  { id: "US", label: "United States" },
-                  { id: "UK", label: "United Kingdom" },
-                  { id: "CA", label: "Canada" },
-                ].map((option) => (
-                  <button
-                    key={option.id || "worldwide"}
-                    onClick={() => handleCountryChange(option.id)}
-                    className={`w-full text-left p-4 rounded-lg cursor-pointer transition-all duration-200 ${
-                      matchPreferences.matchCountry === option.id
-                        ? "bg-green-600 text-white shadow-lg"
-                        : "bg-gray-700 hover:bg-gray-600 text-gray-200"
-                    }`}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="p-6 pt-4 border-t border-gray-700">
-              <button
-                onClick={() => setShowCountryModal(false)}
-                className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-medium transition-colors"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showGameModal && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-          onClick={(e) => handleModalOutsideClick(e, "game")}
-        >
-          <div className="bg-gray-800 rounded-lg max-w-md w-full mx-4 flex flex-col max-h-[80vh]">
-            <div className="p-6 pb-4">
-              <h3 className="text-lg font-semibold mb-4">
-                Select Game Preference
-              </h3>
-              <div className="flex items-center justify-between mb-4">
-                <span className="text-sm text-gray-400">
-                  {matchPreferences.matchInterest?.length || 0} selected
-                </span>
-                <button
-                  onClick={handleClearAllGames}
-                  className="text-sm text-blue-400 hover:text-blue-300 transition-colors"
-                >
-                  Clear All
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 overflow-y-auto px-6">
-              <div className="space-y-2">
-                {games.map((game) => (
-                  <button
-                    key={game.id}
-                    onClick={() =>
-                      handleGameChange(
-                        game.id,
-                        !matchPreferences.matchInterest?.includes(game.id)
-                      )
-                    }
-                    className={`w-full text-left p-4 rounded-lg cursor-pointer transition-all duration-200 ${
-                      matchPreferences.matchInterest?.includes(game.id)
-                        ? "bg-purple-600 text-white shadow-lg"
-                        : "bg-gray-700 hover:bg-gray-600 text-gray-200"
-                    }`}
-                  >
-                    {game.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="p-6 pt-4 border-t border-gray-700">
-              <button
-                onClick={() => setShowGameModal(false)}
-                className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-medium transition-colors"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Shared Preference Modals */}
+      <PreferenceModals
+        showGenderModal={showGenderModal}
+        showCountryModal={showCountryModal}
+        showGameModal={showGameModal}
+        matchPreferences={matchPreferences}
+        onGenderChange={handleGenderChange}
+        onCountryChange={handleCountryChange}
+        onGameChange={handleGameChange}
+        onClearAllGames={handleClearAllGames}
+        onCloseModal={handleCloseModal}
+        onModalOutsideClick={handleModalOutsideClick}
+        showDoneButton={false}
+      />
 
       {showUserProfileModal && (
         <UserProfileModal

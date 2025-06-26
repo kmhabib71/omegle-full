@@ -5,6 +5,8 @@ import { io, Socket } from "socket.io-client";
 import SimplePeer from "simple-peer";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { MatchCriteriaControls } from "./MatchCriteriaControls";
+import { PreferenceModals } from "./PreferenceModals";
 
 interface ConnectionState {
   socket: "disconnected" | "connecting" | "connected";
@@ -125,6 +127,18 @@ export default function SimplePeerVideoChat({
   // Match reason state
   const [matchReason, setMatchReason] = useState<string | null>(null);
 
+  // Match criteria state for the controls
+  const [matchCriteria, setMatchCriteria] = useState({
+    gender: null as string | null,
+    country: null as string | null,
+    interests: [] as string[],
+  });
+
+  // Add modal state management at parent level
+  const [showGenderModal, setShowGenderModal] = useState(false);
+  const [showCountryModal, setShowCountryModal] = useState(false);
+  const [showGameModal, setShowGameModal] = useState(false);
+
   // Initialize anonymous user tracking
   useEffect(() => {
     const initializeUser = async () => {
@@ -136,6 +150,23 @@ export default function SimplePeerVideoChat({
     };
 
     initializeUser();
+  }, []);
+
+  // Load match criteria from localStorage
+  useEffect(() => {
+    const loadCriteria = () => {
+      const savedGender = localStorage.getItem("snappairGenderFilter");
+      const savedCountry = localStorage.getItem("snappairCountryFilter");
+      const savedInterests = localStorage.getItem("snappairInterestFilter");
+
+      setMatchCriteria({
+        gender: savedGender && savedGender !== "all" ? savedGender : null,
+        country: savedCountry || null,
+        interests: savedInterests ? JSON.parse(savedInterests) : [],
+      });
+    };
+
+    loadCriteria();
   }, []);
 
   // Add message functions
@@ -187,6 +218,112 @@ export default function SimplePeerVideoChat({
     setMessages([]);
     setCurrentMessage("");
   }, []);
+
+  // Modal handlers
+  const handleOpenModal = (modalType: "gender" | "country" | "game") => {
+    // Stop search when opening modal
+    handleStopSearch();
+
+    switch (modalType) {
+      case "gender":
+        setShowGenderModal(true);
+        break;
+      case "country":
+        setShowCountryModal(true);
+        break;
+      case "game":
+        setShowGameModal(true);
+        break;
+    }
+  };
+
+  const handleCloseModal = (modalType: "gender" | "country" | "game") => {
+    switch (modalType) {
+      case "gender":
+        setShowGenderModal(false);
+        break;
+      case "country":
+        setShowCountryModal(false);
+        break;
+      case "game":
+        setShowGameModal(false);
+        break;
+    }
+  };
+
+  const handleModalOutsideClick = (e: React.MouseEvent, modalType: string) => {
+    if (e.target === e.currentTarget) {
+      switch (modalType) {
+        case "gender":
+          setShowGenderModal(false);
+          break;
+        case "country":
+          setShowCountryModal(false);
+          break;
+        case "game":
+          setShowGameModal(false);
+          break;
+      }
+    }
+  };
+
+  // Preference change handlers
+  const handleGenderChange = useCallback(
+    (gender: string) => {
+      const updatedCriteria = {
+        ...matchCriteria,
+        gender: gender === "all" ? null : gender,
+      };
+      setMatchCriteria(updatedCriteria);
+    },
+    [matchCriteria]
+  );
+
+  const handleCountryChange = useCallback(
+    (country: string | null) => {
+      const updatedCriteria = {
+        ...matchCriteria,
+        country,
+      };
+      setMatchCriteria(updatedCriteria);
+    },
+    [matchCriteria]
+  );
+
+  const handleGameChange = useCallback(
+    (gameId: string, isSelected: boolean) => {
+      let newInterests: string[];
+      if (isSelected) {
+        newInterests = [...matchCriteria.interests, gameId];
+      } else {
+        newInterests = matchCriteria.interests.filter((g) => g !== gameId);
+      }
+
+      const updatedCriteria = {
+        ...matchCriteria,
+        interests: newInterests,
+      };
+      setMatchCriteria(updatedCriteria);
+    },
+    [matchCriteria]
+  );
+
+  const handleClearAllGames = useCallback(() => {
+    const updatedCriteria = {
+      ...matchCriteria,
+      interests: [],
+    };
+    setMatchCriteria(updatedCriteria);
+  }, [matchCriteria]);
+
+  const handleStopSearch = useCallback(() => {
+    if (socketRef.current && isLookingForPartner) {
+      socketRef.current.emit("stopChat");
+      setIsLookingForPartner(false);
+      setConnectionState((prev) => ({ ...prev, queue: "not_in_queue" }));
+      console.log("🛑 Search stopped by user");
+    }
+  }, [isLookingForPartner]);
 
   // Interest synchronization effect
   useEffect(() => {
@@ -265,16 +402,14 @@ export default function SimplePeerVideoChat({
         // Start new search automatically with a small delay to prevent cascade
         setTimeout(() => {
           if (socketRef.current?.connected) {
-            // Build complete profile for matching engine
+            // Build complete profile for matching engine using current criteria
             const profile = {
               userGender: localStorage.getItem("snappairUserGender") || null,
               userLocation:
                 localStorage.getItem("snappairUserLocation") || null,
-              matchGender:
-                localStorage.getItem("snappairGenderFilter") || "all",
-              matchLocation:
-                localStorage.getItem("snappairCountryFilter") || null,
-              matchGames: interests || [],
+              matchGender: matchCriteria.gender || "all",
+              matchLocation: matchCriteria.country || null,
+              matchGames: matchCriteria.interests || [],
             };
 
             console.log("🔍 Auto-search with profile:", profile);
@@ -311,7 +446,7 @@ export default function SimplePeerVideoChat({
 
       console.log("✅ Phase 6 complete: Auto-search activated, UI updated");
     },
-    [clearMessages, interests]
+    [clearMessages, matchCriteria]
   );
 
   const initializeSocket = useCallback(() => {
@@ -527,13 +662,13 @@ export default function SimplePeerVideoChat({
     setIsLookingForPartner(true);
     setConnectionState((prev) => ({ ...prev, queue: "searching" }));
 
-    // Build complete profile for matching engine
+    // Build complete profile for matching engine using current criteria
     const profile = {
       userGender: localStorage.getItem("snappairUserGender") || null,
       userLocation: localStorage.getItem("snappairUserLocation") || null,
-      matchGender: localStorage.getItem("snappairGenderFilter") || "all",
-      matchLocation: localStorage.getItem("snappairCountryFilter") || null,
-      matchGames: interests || [],
+      matchGender: matchCriteria.gender || "all",
+      matchLocation: matchCriteria.country || null,
+      matchGames: matchCriteria.interests || [],
     };
 
     console.log("🔍 Sending profile to server:", profile);
@@ -541,7 +676,19 @@ export default function SimplePeerVideoChat({
     socketRef.current.emit("find-partner", profile, (response: any) => {
       console.log("📨 Find-partner response:", response);
     });
-  }, [interests]);
+  }, [matchCriteria]);
+
+  const handleDone = useCallback(() => {
+    // Close all modals
+    setShowGenderModal(false);
+    setShowCountryModal(false);
+    setShowGameModal(false);
+
+    // Restart search with updated criteria
+    setTimeout(() => {
+      startSearch();
+    }, 500);
+  }, [startSearch]);
 
   // Phase 5A: NEXT Button Click (Find New Partner)
   const findNextPartner = useCallback(() => {
@@ -583,13 +730,13 @@ export default function SimplePeerVideoChat({
     setIsLookingForPartner(true);
 
     if (socketRef.current?.connected) {
-      // Build complete profile for matching engine
+      // Build complete profile for matching engine using current criteria
       const profile = {
         userGender: localStorage.getItem("snappairUserGender") || null,
         userLocation: localStorage.getItem("snappairUserLocation") || null,
-        matchGender: localStorage.getItem("snappairGenderFilter") || "all",
-        matchLocation: localStorage.getItem("snappairCountryFilter") || null,
-        matchGames: interests || [],
+        matchGender: matchCriteria.gender || "all",
+        matchLocation: matchCriteria.country || null,
+        matchGames: matchCriteria.interests || [],
       };
 
       console.log("🔍 Re-matching with profile:", profile);
@@ -603,7 +750,7 @@ export default function SimplePeerVideoChat({
     console.log(
       "✅ Button state updated: NEXT hidden, STOP enabled, searching indicator shown"
     );
-  }, [partnerId, clearMessages, interests]);
+  }, [partnerId, clearMessages, matchCriteria]);
 
   // Phase 5B: STOP Button Click (Complete Termination)
   const stopSession = useCallback(() => {
@@ -714,6 +861,16 @@ export default function SimplePeerVideoChat({
               <div className="absolute inset-0 flex flex-col items-center justify-center text-white bg-zinc-900">
                 <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-white mb-4"></div>
                 <p className="text-xl mb-6">Finding your next match...</p>
+
+                {/* Match Criteria Controls - Show criteria and allow editing during search */}
+                <div className="mb-6 z-20">
+                  <MatchCriteriaControls
+                    isVisible={true}
+                    currentCriteria={matchCriteria}
+                    onOpenModal={handleOpenModal}
+                    onStopSearch={handleStopSearch}
+                  />
+                </div>
 
                 {/* People animation background */}
                 <div className="absolute inset-0 overflow-hidden -z-10">
@@ -989,6 +1146,29 @@ export default function SimplePeerVideoChat({
             </div>
           </div>
         )}
+
+        {/* Preference Modals - Rendered at parent level to persist */}
+        <PreferenceModals
+          showGenderModal={showGenderModal}
+          showCountryModal={showCountryModal}
+          showGameModal={showGameModal}
+          matchPreferences={{
+            matchGender: matchCriteria.gender || "all",
+            matchCountry: matchCriteria.country,
+            matchInterest:
+              matchCriteria.interests.length > 0
+                ? matchCriteria.interests
+                : null,
+          }}
+          onGenderChange={handleGenderChange}
+          onCountryChange={handleCountryChange}
+          onGameChange={handleGameChange}
+          onClearAllGames={handleClearAllGames}
+          onCloseModal={handleCloseModal}
+          onModalOutsideClick={handleModalOutsideClick}
+          showDoneButton={true}
+          onDone={handleDone}
+        />
       </div>
     </div>
   );
