@@ -10,6 +10,8 @@ export interface IUser extends Document {
   googleId?: string;
   emailVerified?: Date;
   bio?: string;
+  userGender?: string; // User's own gender
+  userLocation?: string; // User's own location (country)
   gender?: string;
   username?: string;
   profileImage?: string;
@@ -61,10 +63,21 @@ const UserSchema: Schema<IUser> = new Schema(
     bio: {
       type: String,
       maxlength: 500,
+      default: "",
+    },
+    userGender: {
+      type: String,
+      enum: ["male", "female", "other"],
+      default: null,
+    },
+    userLocation: {
+      type: String,
+      default: null,
     },
     gender: {
       type: String,
       enum: ["male", "female", "other"],
+      default: null,
     },
     username: {
       type: String,
@@ -74,6 +87,7 @@ const UserSchema: Schema<IUser> = new Schema(
     },
     profileImage: {
       type: String,
+      default: "",
     },
     // Match preferences
     matchGender: {
@@ -98,6 +112,11 @@ const UserSchema: Schema<IUser> = new Schema(
 UserSchema.index({ email: 1 });
 UserSchema.index({ googleId: 1 });
 UserSchema.index({ username: 1 });
+UserSchema.index({ userGender: 1 });
+UserSchema.index({ userLocation: 1 });
+UserSchema.index({ matchGender: 1 });
+UserSchema.index({ matchCountry: 1 });
+UserSchema.index({ matchInterest: 1 });
 
 // Hash password before saving
 UserSchema.pre("save", async function (next) {

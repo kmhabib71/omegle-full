@@ -6,6 +6,10 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
+import SimplePeerVideoChat from "@/components/SimplePeerVideoChat";
+import SimplePeerVoiceChat from "@/components/SimplePeerVoiceChat";
+import SimplePeerTextChat from "@/components/SimplePeerTextChat";
+import UserProfileModal from "@/components/UserProfileModal";
 
 export default function Home() {
   const { data: session, status } = useSession();
@@ -14,21 +18,23 @@ export default function Home() {
   const localStreamRef = useRef<MediaStream | null>(null);
 
   // Filter states
-  const [matchPreferences, setMatchPreferences] = useState<{
-    matchGender: string;
-    matchCountry: string | null;
-    matchInterest: string[] | null;
-  }>({
+  const [matchPreferences, setMatchPreferences] = useState({
     matchGender: "all",
-    matchCountry: null,
-    matchInterest: null,
+    matchCountry: null as string | null,
+    matchInterest: null as string[] | null,
+  });
+
+  // User profile state
+  const [userProfile, setUserProfile] = useState({
+    userGender: null as string | null,
+    userLocation: null as string | null,
   });
 
   // Modal states
-  const [isMatchGenderModalOpen, setIsMatchGenderModalOpen] = useState(false);
-  const [isMatchCountryModalOpen, setIsMatchCountryModalOpen] = useState(false);
-  const [isMatchInterestModalOpen, setIsMatchInterestModalOpen] =
-    useState(false);
+  const [showGenderModal, setShowGenderModal] = useState(false);
+  const [showCountryModal, setShowCountryModal] = useState(false);
+  const [showGameModal, setShowGameModal] = useState(false);
+  const [showUserProfileModal, setShowUserProfileModal] = useState(false);
 
   // Connection states
   const [isVideoConnecting, setIsVideoConnecting] = useState(false);
@@ -38,6 +44,9 @@ export default function Home() {
   // Camera states
   const [showCameraOptions, setShowCameraOptions] = useState(false);
   const [activeFilter, setActiveFilter] = useState("none");
+
+  // Chat states
+  const [activeChat, setActiveChat] = useState<string | null>(null);
 
   // Initialize user's webcam for preview
   useEffect(() => {
@@ -74,7 +83,22 @@ export default function Home() {
   useEffect(() => {
     const loadPreferences = async () => {
       if (typeof window !== "undefined") {
-        // First load from localStorage for immediate UI update
+        // Check if user profile exists
+        const savedUserGender = localStorage.getItem("snappairUserGender");
+        const savedUserLocation = localStorage.getItem("snappairUserLocation");
+
+        if (!savedUserGender || !savedUserLocation) {
+          // Show user profile modal if profile is not set
+          setShowUserProfileModal(true);
+        } else {
+          // Load user profile from localStorage
+          setUserProfile({
+            userGender: savedUserGender,
+            userLocation: savedUserLocation,
+          });
+        }
+
+        // Load match preferences from localStorage for immediate UI update
         const savedGender =
           localStorage.getItem("snappairGenderFilter") || "all";
         const savedCountry =
@@ -143,6 +167,28 @@ export default function Home() {
                 localStorage.removeItem("snappairInterestFilter");
               }
             }
+
+            // Also load user profile from database if authenticated
+            const profileResponse = await fetch("/api/users/profile");
+            if (profileResponse.ok) {
+              const dbProfile = await profileResponse.json();
+              if (dbProfile.userGender && dbProfile.userLocation) {
+                setUserProfile({
+                  userGender: dbProfile.userGender,
+                  userLocation: dbProfile.userLocation,
+                });
+
+                // Sync with localStorage
+                localStorage.setItem(
+                  "snappairUserGender",
+                  dbProfile.userGender
+                );
+                localStorage.setItem(
+                  "snappairUserLocation",
+                  dbProfile.userLocation
+                );
+              }
+            }
           } catch (error) {
             console.error("Error loading preferences from database:", error);
           }
@@ -153,37 +199,85 @@ export default function Home() {
     loadPreferences();
   }, [session]);
 
+  // Handle user profile completion
+  const handleUserProfileComplete = (profile: {
+    userGender: string;
+    userLocation: string;
+  }) => {
+    setUserProfile(profile);
+    console.log("User profile completed:", profile);
+  };
+
   // Chat handlers
-  const handleStartVideoChat = () => {
+  const handleVideoChat = () => {
     if (!session) {
       router.push("/auth/signin");
       return;
     }
+
+    // Store user profile data in sessionStorage for the chat pages to use
+    const chatProfile = {
+      userGender: userProfile.userGender,
+      userLocation: userProfile.userLocation,
+      matchGender: matchPreferences.matchGender,
+      matchLocation: matchPreferences.matchCountry,
+      matchGames: matchPreferences.matchInterest || [],
+    };
+
+    sessionStorage.setItem("snappairChatProfile", JSON.stringify(chatProfile));
+    console.log("Starting video chat with profile:", chatProfile);
+
     setIsVideoConnecting(true);
     setTimeout(() => {
       router.push("/video-chat");
     }, 1000);
   };
 
-  const handleStartTextChat = () => {
+  const handleVoiceChat = () => {
     if (!session) {
       router.push("/auth/signin");
       return;
     }
-    setIsTextConnecting(true);
-    setTimeout(() => {
-      router.push("/text-chat");
-    }, 1000);
-  };
 
-  const handleStartVoiceChat = () => {
-    if (!session) {
-      router.push("/auth/signin");
-      return;
-    }
+    // Store user profile data in sessionStorage for the chat pages to use
+    const chatProfile = {
+      userGender: userProfile.userGender,
+      userLocation: userProfile.userLocation,
+      matchGender: matchPreferences.matchGender,
+      matchLocation: matchPreferences.matchCountry,
+      matchGames: matchPreferences.matchInterest || [],
+    };
+
+    sessionStorage.setItem("snappairChatProfile", JSON.stringify(chatProfile));
+    console.log("Starting voice chat with profile:", chatProfile);
+
     setIsVoiceConnecting(true);
     setTimeout(() => {
       router.push("/voice-chat");
+    }, 1000);
+  };
+
+  const handleTextChat = () => {
+    if (!session) {
+      router.push("/auth/signin");
+      return;
+    }
+
+    // Store user profile data in sessionStorage for the chat pages to use
+    const chatProfile = {
+      userGender: userProfile.userGender,
+      userLocation: userProfile.userLocation,
+      matchGender: matchPreferences.matchGender,
+      matchLocation: matchPreferences.matchCountry,
+      matchGames: matchPreferences.matchInterest || [],
+    };
+
+    sessionStorage.setItem("snappairChatProfile", JSON.stringify(chatProfile));
+    console.log("Starting text chat with profile:", chatProfile);
+
+    setIsTextConnecting(true);
+    setTimeout(() => {
+      router.push("/text-chat");
     }, 1000);
   };
 
@@ -366,13 +460,13 @@ export default function Home() {
     if (e.target === e.currentTarget) {
       switch (modalType) {
         case "gender":
-          setIsMatchGenderModalOpen(false);
+          setShowGenderModal(false);
           break;
         case "country":
-          setIsMatchCountryModalOpen(false);
+          setShowCountryModal(false);
           break;
         case "game":
-          setIsMatchInterestModalOpen(false);
+          setShowGameModal(false);
           break;
       }
     }
@@ -565,7 +659,7 @@ export default function Home() {
             {/* Gender Filter Button */}
             <button
               className="rounded-full px-6 py-3 flex items-center justify-center gap-2 text-sm border border-gray-700 bg-gray-800/60 hover:bg-gray-700/80 transition-colors"
-              onClick={() => setIsMatchGenderModalOpen(true)}
+              onClick={() => setShowGenderModal(true)}
             >
               <span className="inline-flex items-center justify-center w-6 h-6 bg-blue-500 rounded-full">
                 <svg
@@ -589,7 +683,7 @@ export default function Home() {
             {/* Location Filter Button */}
             <button
               className="rounded-full px-6 py-3 flex items-center justify-center gap-2 text-sm border border-gray-700 bg-gray-800/60 hover:bg-gray-700/80 transition-colors"
-              onClick={() => setIsMatchCountryModalOpen(true)}
+              onClick={() => setShowCountryModal(true)}
             >
               <span className="inline-flex items-center justify-center w-6 h-6 bg-green-500 rounded-full">
                 <svg
@@ -611,7 +705,7 @@ export default function Home() {
             {/* Game Filter Button */}
             <button
               className="rounded-full px-6 py-3 flex items-center justify-center gap-2 text-sm border border-gray-700 bg-gray-800/60 hover:bg-gray-700/80 transition-colors"
-              onClick={() => setIsMatchInterestModalOpen(true)}
+              onClick={() => setShowGameModal(true)}
             >
               <span className="inline-flex items-center justify-center w-6 h-6 bg-purple-500 rounded-full">
                 <svg
@@ -634,7 +728,7 @@ export default function Home() {
 
             {/* Desktop Video Chat Button */}
             <button
-              onClick={handleStartVideoChat}
+              onClick={handleVideoChat}
               disabled={
                 isVideoConnecting || isTextConnecting || isVoiceConnecting
               }
@@ -671,7 +765,7 @@ export default function Home() {
           <div className="max-w-2xl mx-auto space-y-4">
             {/* Mobile Video Chat Button */}
             <button
-              onClick={handleStartVideoChat}
+              onClick={handleVideoChat}
               disabled={
                 isVideoConnecting || isTextConnecting || isVoiceConnecting
               }
@@ -705,7 +799,7 @@ export default function Home() {
 
             {/* Text Chat Button */}
             <button
-              onClick={handleStartTextChat}
+              onClick={handleTextChat}
               disabled={
                 isVideoConnecting || isTextConnecting || isVoiceConnecting
               }
@@ -739,7 +833,7 @@ export default function Home() {
 
             {/* Voice Chat Button */}
             <button
-              onClick={handleStartVoiceChat}
+              onClick={handleVoiceChat}
               disabled={
                 isVideoConnecting || isTextConnecting || isVoiceConnecting
               }
@@ -786,7 +880,7 @@ export default function Home() {
       <Footer />
 
       {/* Modal Overlays */}
-      {isMatchGenderModalOpen && (
+      {showGenderModal && (
         <div
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
           onClick={(e) => handleModalOutsideClick(e, "gender")}
@@ -820,7 +914,7 @@ export default function Home() {
             </div>
             <div className="p-6 pt-4 border-t border-gray-700">
               <button
-                onClick={() => setIsMatchGenderModalOpen(false)}
+                onClick={() => setShowGenderModal(false)}
                 className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-medium transition-colors"
               >
                 Done
@@ -830,7 +924,7 @@ export default function Home() {
         </div>
       )}
 
-      {isMatchCountryModalOpen && (
+      {showCountryModal && (
         <div
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
           onClick={(e) => handleModalOutsideClick(e, "country")}
@@ -865,7 +959,7 @@ export default function Home() {
             </div>
             <div className="p-6 pt-4 border-t border-gray-700">
               <button
-                onClick={() => setIsMatchCountryModalOpen(false)}
+                onClick={() => setShowCountryModal(false)}
                 className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-medium transition-colors"
               >
                 Done
@@ -875,7 +969,7 @@ export default function Home() {
         </div>
       )}
 
-      {isMatchInterestModalOpen && (
+      {showGameModal && (
         <div
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
           onClick={(e) => handleModalOutsideClick(e, "game")}
@@ -921,7 +1015,7 @@ export default function Home() {
             </div>
             <div className="p-6 pt-4 border-t border-gray-700">
               <button
-                onClick={() => setIsMatchInterestModalOpen(false)}
+                onClick={() => setShowGameModal(false)}
                 className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-medium transition-colors"
               >
                 Done
@@ -929,6 +1023,14 @@ export default function Home() {
             </div>
           </div>
         </div>
+      )}
+
+      {showUserProfileModal && (
+        <UserProfileModal
+          isOpen={showUserProfileModal}
+          onClose={() => setShowUserProfileModal(false)}
+          onComplete={handleUserProfileComplete}
+        />
       )}
     </main>
   );

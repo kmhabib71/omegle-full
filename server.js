@@ -1,7 +1,11 @@
 const { createServer } = require("http");
 const { Server } = require("socket.io");
+const MatchingEngine = require("./server/modules/matchingEngine");
 
-// Store for managing users and their connections
+// Create matching engine instance
+const matchingEngine = new MatchingEngine();
+
+// Store for managing users and their connections (legacy - will be replaced by matchingEngine)
 const users = new Map();
 const waitingUsers = new Map(); // interests -> user IDs
 const recentPartners = new Map(); // userId -> Set of recent partner IDs to prevent immediate re-matching
@@ -61,12 +65,12 @@ io.on("connection", (socket) => {
   });
 
   // Handle user finding partner (Phase 2) - renamed from "join" as it's reserved
-  socket.on("find-partner", (interests = [], callback) => {
+  socket.on("find-partner", (userProfile = {}, callback) => {
     console.log(
       "🚀 FIND-PARTNER EVENT RECEIVED from:",
       socket.id,
-      "with interests:",
-      interests
+      "with profile:",
+      userProfile
     );
 
     // Send acknowledgment if callback provided
@@ -79,8 +83,8 @@ io.on("connection", (socket) => {
       });
     }
 
-    // 🔧 FIX: Check if user is already connected to someone (NEXT button scenario)
-    const existingUser = users.get(socket.id);
+    // Handle existing connection (NEXT button scenario)
+    const existingUser = matchingEngine.users.get(socket.id);
     if (existingUser && existingUser.partnerId && existingUser.inCall) {
       console.log(
         "🔄 User clicking NEXT - disconnecting current partner:",
@@ -88,99 +92,155 @@ io.on("connection", (socket) => {
       );
 
       const currentPartnerId = existingUser.partnerId;
-      const currentPartner = users.get(currentPartnerId);
 
-      // 🚨 ATOMIC DISCONNECTION: Reset both users' states simultaneously to prevent cascade
-      existingUser.inCall = false;
-      existingUser.partnerId = undefined;
+      // Disconnect users using matching engine
+      matchingEngine.disconnectUsers(socket.id, currentPartnerId);
 
-      if (currentPartner) {
-        currentPartner.inCall = false;
-        currentPartner.partnerId = undefined;
-
-        // Only notify partner if they're still connected to this user (prevent double notifications)
-        if (
-          currentPartner.partnerId === socket.id ||
-          !currentPartner.partnerId
-        ) {
-          io.to(currentPartnerId).emit("partner-disconnected", {
-            skipAutoSearch: false,
-            reason: "Partner clicked NEXT",
-          });
-          console.log(
-            "✅ Partner notified about disconnection (auto-search enabled):",
-            currentPartnerId
-          );
-        }
-      }
+      // Notify partner
+      io.to(currentPartnerId).emit("partner-disconnected", {
+        skipAutoSearch: false,
+        reason: "Partner clicked NEXT",
+      });
     }
 
-    console.log("📊 Current users before join:", Array.from(users.keys()));
-    console.log(
-      "📊 Current users data before join:",
-      Array.from(users.entries())
-    );
-    console.log("📊 Current waiting lists before join:");
-    waitingUsers.forEach((userIds, key) => {
-      console.log(`  ${key}: [${userIds.join(", ")}]`);
-    });
+    // Add user to matching engine with enhanced profile
+    const userProfileData = {
+      userGender: userProfile.userGender || null,
+      userLocation: userProfile.userLocation || null,
+      matchGender: userProfile.matchGender || "all",
+      matchLocation: userProfile.matchLocation || null,
+      matchGames: userProfile.matchGames || userProfile.interests || [],
+    };
 
-    // Reset manual stop flag when user starts finding partner
-    const existingUserData = users.get(socket.id);
+    matchingEngine.addUser(socket.id, userProfileData);
+
+    // Legacy support - also add to old users map for backward compatibility
     users.set(socket.id, {
       id: socket.id,
-      interests,
+      interests: userProfile.matchGames || userProfile.interests || [],
       inCall: false,
-      manualStop: false, // Reset manual stop flag when actively finding partner
+      manualStop: false,
     });
 
-    if (existingUserData && existingUserData.manualStop) {
-      console.log("🟢 Manual stop flag reset for:", socket.id);
+    // Try to find a match using new engine
+    console.log("🔍 CALLING enhanced findMatch for:", socket.id);
+    const match = matchingEngine.findMatch(socket.id);
+
+    if (match) {
+      // Match found - create session and notify both users
+      const { userId1, userId2 } = match;
+      const initiator = userId1 < userId2 ? userId1 : userId2;
+      const sessionId = `${userId1 < userId2 ? userId1 : userId2}-${
+        userId1 < userId2 ? userId2 : userId1
+      }-${Date.now()}`;
+
+      console.log(
+        `🎯 Enhanced match details: initiator=${initiator}, sessionId=${sessionId}`
+      );
+
+      // Update legacy users map for compatibility
+      if (users.has(userId1)) {
+        users.get(userId1).inCall = true;
+        users.get(userId1).partnerId = userId2;
+      }
+      if (users.has(userId2)) {
+        users.get(userId2).inCall = true;
+        users.get(userId2).partnerId = userId1;
+      }
+
+      // Emit partner-found event
+      io.to(userId1).emit("partner-found", {
+        partnerId: userId2,
+        sessionId: sessionId,
+        isInitiator: userId1 === initiator,
+      });
+
+      io.to(userId2).emit("partner-found", {
+        partnerId: userId1,
+        sessionId: sessionId,
+        isInitiator: userId2 === initiator,
+      });
+
+      // Legacy compatibility
+      io.to(userId1).emit("matched", {
+        partnerId: userId2,
+        isInitiator: userId1 === initiator,
+        sessionId: sessionId,
+      });
+
+      io.to(userId2).emit("matched", {
+        partnerId: userId1,
+        isInitiator: userId2 === initiator,
+        sessionId: sessionId,
+      });
+
+      console.log("✅ Enhanced match created successfully!");
+    } else {
+      console.log("📝 User added to enhanced waiting queues");
     }
-
-    console.log("📊 Current users after join:", Array.from(users.keys()));
-    console.log(
-      "📊 Current users data after join:",
-      Array.from(users.entries())
-    );
-
-    // Try to find a match
-    console.log("🔍 CALLING findMatch for:", socket.id);
-    findMatch(socket.id, interests);
   });
 
   // Handle finding next partner (Phase 5)
   socket.on("findNext", () => {
     console.log("🔄 Finding next partner for:", socket.id);
-    const user = users.get(socket.id);
-    if (user) {
-      // Disconnect from current partner
-      if (user.partnerId) {
-        const partner = users.get(user.partnerId);
-        if (partner) {
-          partner.inCall = false;
-          partner.partnerId = undefined;
-          io.to(user.partnerId).emit("partner-disconnected", {
-            skipAutoSearch: false,
-            reason: "Partner clicked NEXT",
-          });
-        }
+    const user = matchingEngine.users.get(socket.id);
+    if (user && user.partnerId) {
+      // Disconnect from current partner using matching engine
+      matchingEngine.disconnectUsers(socket.id, user.partnerId);
+
+      // Update legacy users map
+      if (users.has(user.partnerId)) {
+        users.get(user.partnerId).inCall = false;
+        users.get(user.partnerId).partnerId = undefined;
       }
 
-      // Reset user state
-      user.inCall = false;
-      user.partnerId = undefined;
+      // Notify partner
+      io.to(user.partnerId).emit("partner-disconnected", {
+        skipAutoSearch: false,
+        reason: "Partner clicked NEXT",
+      });
 
-      // Find new match
-      findMatch(socket.id, user.interests);
+      // Find new match using matching engine
+      const match = matchingEngine.findMatch(socket.id);
+      if (match) {
+        const { userId1, userId2 } = match;
+        const initiator = userId1 < userId2 ? userId1 : userId2;
+        const sessionId = `${Date.now()}-${Math.random()
+          .toString(36)
+          .substr(2, 9)}`;
+
+        // Update legacy users map
+        if (users.has(userId1)) {
+          users.get(userId1).inCall = true;
+          users.get(userId1).partnerId = userId2;
+        }
+        if (users.has(userId2)) {
+          users.get(userId2).inCall = true;
+          users.get(userId2).partnerId = userId1;
+        }
+
+        // Notify both users
+        io.to(userId1).emit("partner-found", {
+          partnerId: userId2,
+          sessionId: sessionId,
+          isInitiator: userId1 === initiator,
+        });
+
+        io.to(userId2).emit("partner-found", {
+          partnerId: userId1,
+          sessionId: sessionId,
+          isInitiator: userId2 === initiator,
+        });
+      }
     }
   });
 
   // Handle leaving queue
   socket.on("leave-queue", () => {
     console.log("📤 User leaving queue:", socket.id);
+    matchingEngine.removeFromAllQueues(socket.id);
 
-    // Remove from waiting lists
+    // Legacy cleanup
     waitingUsers.forEach((userIds, interests) => {
       const index = userIds.indexOf(socket.id);
       if (index > -1) {
@@ -194,50 +254,53 @@ io.on("connection", (socket) => {
   // Handle partner disconnect
   socket.on("disconnect-partner", () => {
     console.log("🔌 Disconnecting partner for:", socket.id);
-    const user = users.get(socket.id);
+    const user = matchingEngine.users.get(socket.id);
     if (user && user.partnerId) {
-      const partner = users.get(user.partnerId);
-      if (partner) {
-        partner.inCall = false;
-        partner.partnerId = undefined;
-        io.to(user.partnerId).emit("partner-disconnected", {
-          skipAutoSearch: false,
-          reason: "Partner manually disconnected",
-        });
+      matchingEngine.disconnectUsers(socket.id, user.partnerId);
+
+      // Update legacy users map
+      if (users.has(user.partnerId)) {
+        users.get(user.partnerId).inCall = false;
+        users.get(user.partnerId).partnerId = undefined;
       }
-      user.inCall = false;
-      user.partnerId = undefined;
+
+      io.to(user.partnerId).emit("partner-disconnected", {
+        skipAutoSearch: false,
+        reason: "Partner manually disconnected",
+      });
     }
   });
 
   // Handle stopping chat (Phase 7)
   socket.on("stopChat", () => {
     console.log("🛑 Stopping chat for:", socket.id);
-    const user = users.get(socket.id);
+    const user = matchingEngine.users.get(socket.id);
     if (user && user.partnerId) {
-      const partner = users.get(user.partnerId);
-      if (partner) {
-        partner.inCall = false;
-        partner.partnerId = undefined;
-        io.to(user.partnerId).emit("partner-disconnected", {
-          skipAutoSearch: false,
-          reason: "Partner stopped the chat",
-        });
-      }
-      user.inCall = false;
-      user.partnerId = undefined;
-      // 🚨 FIXED: Set manual stop flag for 30 seconds only
-      user.manualStop = true;
-      console.log("🛑 Manual stop flag set for 30 seconds:", socket.id);
+      matchingEngine.disconnectUsers(socket.id, user.partnerId);
 
-      // Auto-reset manualStop after 30 seconds
-      setTimeout(() => {
-        const currentUser = users.get(socket.id);
-        if (currentUser && currentUser.manualStop) {
-          currentUser.manualStop = false;
-          console.log("🟢 Manual stop flag auto-reset for:", socket.id);
-        }
-      }, 30000);
+      // Update legacy users map
+      if (users.has(user.partnerId)) {
+        users.get(user.partnerId).inCall = false;
+        users.get(user.partnerId).partnerId = undefined;
+      }
+
+      io.to(user.partnerId).emit("partner-disconnected", {
+        skipAutoSearch: false,
+        reason: "Partner stopped the chat",
+      });
+
+      // Set manual stop flag using matching engine
+      matchingEngine.setManualStop(socket.id);
+
+      // Update legacy users map
+      if (users.has(socket.id)) {
+        users.get(socket.id).manualStop = true;
+        setTimeout(() => {
+          if (users.has(socket.id)) {
+            users.get(socket.id).manualStop = false;
+          }
+        }, 30000);
+      }
     }
     socket.emit("chat-stopped");
   });
@@ -427,32 +490,51 @@ io.on("connection", (socket) => {
   // Handle disconnect (Phase 6)
   socket.on("disconnect", () => {
     console.log("❌ User disconnected:", socket.id);
-    const user = users.get(socket.id);
+
+    // Get user from matching engine
+    const user = matchingEngine.users.get(socket.id);
     if (user) {
-      // Notify partner
+      // Notify partner using matching engine
       if (user.partnerId) {
-        const partner = users.get(user.partnerId);
+        matchingEngine.disconnectUsers(socket.id, user.partnerId);
+
+        // Update legacy users map
+        if (users.has(user.partnerId)) {
+          users.get(user.partnerId).inCall = false;
+          users.get(user.partnerId).partnerId = undefined;
+        }
+
+        // Don't skip auto-search for unexpected disconnections
+        io.to(user.partnerId).emit("partner-disconnected", {
+          skipAutoSearch: false,
+          reason: "Partner disconnected unexpectedly",
+        });
+      }
+
+      // Remove from matching engine
+      matchingEngine.removeUser(socket.id);
+    }
+
+    // Legacy cleanup
+    if (users.has(socket.id)) {
+      const legacyUser = users.get(socket.id);
+      if (legacyUser.partnerId) {
+        const partner = users.get(legacyUser.partnerId);
         if (partner) {
           partner.inCall = false;
           partner.partnerId = undefined;
-          // Don't skip auto-search for unexpected disconnections (user closes browser, network issues, etc.)
-          io.to(user.partnerId).emit("partner-disconnected", {
-            skipAutoSearch: false,
-            reason: "Partner disconnected unexpectedly",
-          });
         }
       }
-
-      // Remove from waiting lists
-      waitingUsers.forEach((userIds, interests) => {
-        const index = userIds.indexOf(socket.id);
-        if (index > -1) {
-          userIds.splice(index, 1);
-        }
-      });
-
       users.delete(socket.id);
     }
+
+    // Remove from waiting lists (legacy)
+    waitingUsers.forEach((userIds, interests) => {
+      const index = userIds.indexOf(socket.id);
+      if (index > -1) {
+        userIds.splice(index, 1);
+      }
+    });
   });
 
   // Heartbeat for connection monitoring

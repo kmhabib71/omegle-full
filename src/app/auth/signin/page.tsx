@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { signIn } from "next-auth/react";
+import { useState, useEffect } from "react";
+import { signIn, getSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
@@ -12,48 +12,53 @@ export default function SignIn() {
   const [error, setError] = useState("");
   const router = useRouter();
 
-  // Function to sync localStorage preferences to database
-  const syncLocalStorageToDatabase = async () => {
+  const syncUserProfileToDatabase = async () => {
     try {
-      // Get preferences from localStorage
-      const savedGender = localStorage.getItem("snappairGenderFilter") || "all";
-      const savedCountry =
-        localStorage.getItem("snappairCountryFilter") || null;
+      const userGender = localStorage.getItem("snappairUserGender");
+      const userLocation = localStorage.getItem("snappairUserLocation");
+      const matchGender = localStorage.getItem("snappairMatchGender");
+      const matchCountry = localStorage.getItem("snappairMatchCountry");
+      const matchInterest = localStorage.getItem("snappairMatchInterest");
 
-      let savedInterests = null;
-      try {
-        const savedInterestsStr = localStorage.getItem(
-          "snappairInterestFilter"
-        );
-        if (savedInterestsStr) {
-          savedInterests = JSON.parse(savedInterestsStr);
+      const updateData: any = {};
+
+      // Add user profile data if exists
+      if (userGender) updateData.userGender = userGender;
+      if (userLocation) updateData.userLocation = userLocation;
+
+      // Add preferences if they exist
+      if (matchGender) updateData.matchGender = matchGender;
+      if (matchCountry) updateData.matchCountry = matchCountry;
+      if (matchInterest) {
+        try {
+          updateData.matchInterest = JSON.parse(matchInterest);
+        } catch (e) {
+          console.error("Error parsing matchInterest:", e);
         }
-      } catch (err) {
-        console.error("Error parsing saved interests:", err);
       }
 
-      // Save to database
-      const response = await fetch("/api/users/match-preferences", {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          matchGender: savedGender,
-          matchCountry: savedCountry,
-          matchInterest: savedInterests,
-        }),
-      });
+      // Only make API call if we have data to sync
+      if (Object.keys(updateData).length > 0) {
+        const response = await fetch("/api/users/profile", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(updateData),
+        });
 
-      if (!response.ok) {
-        console.error("Failed to sync preferences to database");
+        if (!response.ok) {
+          console.error("Failed to sync user profile to database");
+        } else {
+          console.log("User profile synced to database successfully");
+        }
       }
     } catch (error) {
-      console.error("Error syncing localStorage to database:", error);
+      console.error("Error syncing user profile:", error);
     }
   };
 
-  const handleEmailSignIn = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError("");
@@ -68,15 +73,14 @@ export default function SignIn() {
       if (result?.error) {
         setError("Invalid email or password");
       } else {
-        // Sync localStorage preferences to database after successful login
+        // Wait a moment for session to be established
         setTimeout(async () => {
-          await syncLocalStorageToDatabase();
-        }, 1000); // Small delay to ensure session is established
-
-        router.push("/");
+          await syncUserProfileToDatabase();
+          router.push("/");
+        }, 1000);
       }
-    } catch {
-      setError("An error occurred. Please try again.");
+    } catch (error) {
+      setError("An unexpected error occurred");
     } finally {
       setLoading(false);
     }
@@ -85,10 +89,17 @@ export default function SignIn() {
   const handleGoogleSignIn = async () => {
     setLoading(true);
     try {
-      await signIn("google", { callbackUrl: "/" });
-      // Note: localStorage sync will happen on the home page after redirect
-    } catch {
-      setError("Google sign-in failed");
+      const result = await signIn("google", { redirect: false });
+      if (!result?.error) {
+        // Wait a moment for session to be established
+        setTimeout(async () => {
+          await syncUserProfileToDatabase();
+          router.push("/");
+        }, 1000);
+      }
+    } catch (error) {
+      setError("Google sign in failed");
+    } finally {
       setLoading(false);
     }
   };
@@ -149,7 +160,7 @@ export default function SignIn() {
             </div>
           </div>
 
-          <form className="mt-8 space-y-6" onSubmit={handleEmailSignIn}>
+          <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
             {error && (
               <div className="rounded-md bg-red-50 p-4">
                 <div className="text-sm text-red-700">{error}</div>
