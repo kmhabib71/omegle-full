@@ -14,6 +14,47 @@ export default function SignUp() {
   const [error, setError] = useState("");
   const router = useRouter();
 
+  // Function to sync localStorage preferences to database
+  const syncLocalStorageToDatabase = async () => {
+    try {
+      // Get preferences from localStorage
+      const savedGender = localStorage.getItem("snappairGenderFilter") || "all";
+      const savedCountry =
+        localStorage.getItem("snappairCountryFilter") || null;
+
+      let savedInterests = null;
+      try {
+        const savedInterestsStr = localStorage.getItem(
+          "snappairInterestFilter"
+        );
+        if (savedInterestsStr) {
+          savedInterests = JSON.parse(savedInterestsStr);
+        }
+      } catch (err) {
+        console.error("Error parsing saved interests:", err);
+      }
+
+      // Save to database
+      const response = await fetch("/api/users/match-preferences", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          matchGender: savedGender,
+          matchCountry: savedCountry,
+          matchInterest: savedInterests,
+        }),
+      });
+
+      if (!response.ok) {
+        console.error("Failed to sync preferences to database");
+      }
+    } catch (error) {
+      console.error("Error syncing localStorage to database:", error);
+    }
+  };
+
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -49,6 +90,11 @@ export default function SignUp() {
             "Registration successful but sign-in failed. Please try signing in."
           );
         } else {
+          // Sync localStorage preferences to database after successful signup and login
+          setTimeout(async () => {
+            await syncLocalStorageToDatabase();
+          }, 1000); // Small delay to ensure session is established
+
           router.push("/");
         }
       } else {
@@ -65,6 +111,7 @@ export default function SignUp() {
     setLoading(true);
     try {
       await signIn("google", { callbackUrl: "/" });
+      // Note: localStorage sync will happen on the home page after redirect
     } catch {
       setError("Google sign-in failed");
       setLoading(false);

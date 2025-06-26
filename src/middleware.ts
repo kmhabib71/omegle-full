@@ -15,5 +15,10 @@ export default withAuth(
 
 // Protect these routes
 export const config = {
-  matcher: ["/video-chat/:path*", "/text-chat/:path*"],
+  matcher: [
+    "/video-chat/:path*",
+    "/text-chat/:path*",
+    "/voice-chat/:path*",
+    "/profile/:path*",
+  ],
 };

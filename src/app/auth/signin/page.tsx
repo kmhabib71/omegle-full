@@ -12,6 +12,47 @@ export default function SignIn() {
   const [error, setError] = useState("");
   const router = useRouter();
 
+  // Function to sync localStorage preferences to database
+  const syncLocalStorageToDatabase = async () => {
+    try {
+      // Get preferences from localStorage
+      const savedGender = localStorage.getItem("snappairGenderFilter") || "all";
+      const savedCountry =
+        localStorage.getItem("snappairCountryFilter") || null;
+
+      let savedInterests = null;
+      try {
+        const savedInterestsStr = localStorage.getItem(
+          "snappairInterestFilter"
+        );
+        if (savedInterestsStr) {
+          savedInterests = JSON.parse(savedInterestsStr);
+        }
+      } catch (err) {
+        console.error("Error parsing saved interests:", err);
+      }
+
+      // Save to database
+      const response = await fetch("/api/users/match-preferences", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          matchGender: savedGender,
+          matchCountry: savedCountry,
+          matchInterest: savedInterests,
+        }),
+      });
+
+      if (!response.ok) {
+        console.error("Failed to sync preferences to database");
+      }
+    } catch (error) {
+      console.error("Error syncing localStorage to database:", error);
+    }
+  };
+
   const handleEmailSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -27,6 +68,11 @@ export default function SignIn() {
       if (result?.error) {
         setError("Invalid email or password");
       } else {
+        // Sync localStorage preferences to database after successful login
+        setTimeout(async () => {
+          await syncLocalStorageToDatabase();
+        }, 1000); // Small delay to ensure session is established
+
         router.push("/");
       }
     } catch {
@@ -40,6 +86,7 @@ export default function SignIn() {
     setLoading(true);
     try {
       await signIn("google", { callbackUrl: "/" });
+      // Note: localStorage sync will happen on the home page after redirect
     } catch {
       setError("Google sign-in failed");
       setLoading(false);

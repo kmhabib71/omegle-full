@@ -9,6 +9,14 @@ export interface IUser extends Document {
   provider: "email" | "google";
   googleId?: string;
   emailVerified?: Date;
+  bio?: string;
+  gender?: string;
+  username?: string;
+  profileImage?: string;
+  // Match preferences
+  matchGender?: string;
+  matchCountry?: string;
+  matchInterest?: string[]; // Game preferences
   createdAt: Date;
   updatedAt: Date;
   comparePassword(candidatePassword: string): Promise<boolean>;
@@ -50,6 +58,36 @@ const UserSchema: Schema<IUser> = new Schema(
     emailVerified: {
       type: Date,
     },
+    bio: {
+      type: String,
+      maxlength: 500,
+    },
+    gender: {
+      type: String,
+      enum: ["male", "female", "other"],
+    },
+    username: {
+      type: String,
+      unique: true,
+      sparse: true,
+      trim: true,
+    },
+    profileImage: {
+      type: String,
+    },
+    // Match preferences
+    matchGender: {
+      type: String,
+      enum: ["all", "male", "female"],
+      default: "all",
+    },
+    matchCountry: {
+      type: String,
+    },
+    matchInterest: {
+      type: [String],
+      default: [],
+    },
   },
   {
     timestamps: true,
@@ -59,6 +97,7 @@ const UserSchema: Schema<IUser> = new Schema(
 // Index for performance
 UserSchema.index({ email: 1 });
 UserSchema.index({ googleId: 1 });
+UserSchema.index({ username: 1 });
 
 // Hash password before saving
 UserSchema.pre("save", async function (next) {
