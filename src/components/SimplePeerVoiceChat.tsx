@@ -3,7 +3,9 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
 import SimplePeer from "simple-peer";
+import { useSearchParams } from "next/navigation";
 import { MatchCriteriaControls } from "./MatchCriteriaControls";
+import { PreferenceModals } from "./PreferenceModals";
 
 interface ConnectionState {
   socket: "disconnected" | "connecting" | "connected";
@@ -28,14 +30,52 @@ interface SimplePeerVoiceChatProps {
   session?: any;
 }
 
+// Anonymous user tracking utility
+const createAnonymousUser = async () => {
+  try {
+    const response = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ isAnonymous: true }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      localStorage.setItem("anonymousUser", JSON.stringify(data.user));
+      return data.user;
+    }
+  } catch (error) {
+    console.error("Failed to create anonymous user:", error);
+  }
+  return null;
+};
+
+const getOrCreateAnonymousUser = async () => {
+  const existingUser = localStorage.getItem("anonymousUser");
+  if (existingUser) {
+    try {
+      return JSON.parse(existingUser);
+    } catch (error) {
+      console.error("Error parsing existing anonymous user:", error);
+    }
+  }
+  return await createAnonymousUser();
+};
+
 export default function SimplePeerVoiceChat({
   session,
 }: SimplePeerVoiceChatProps) {
+  const searchParams = useSearchParams();
   const socketRef = useRef<Socket | null>(null);
   const peerRef = useRef<SimplePeer.Instance | null>(null);
   const localAudioRef = useRef<HTMLAudioElement>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+
+  const [interests, setInterests] = useState<string[]>([]);
+  const [anonymousUser, setAnonymousUser] = useState<any>(null);
 
   const [connectionState, setConnectionState] = useState<ConnectionState>({
     socket: "disconnected",
@@ -58,130 +98,250 @@ export default function SimplePeerVoiceChat({
     string | null
   >(null);
   const [showDisconnectionAlert, setShowDisconnectionAlert] = useState(false);
-  const [interests, setInterests] = useState<string[]>([]);
-  const [currentInterest, setCurrentInterest] = useState("");
   const [isMuted, setIsMuted] = useState(false);
+  const [matchReason, setMatchReason] = useState<string | null>(null);
 
-  // Match criteria state
   const [matchCriteria, setMatchCriteria] = useState({
     gender: null as string | null,
     country: null as string | null,
     interests: [] as string[],
   });
 
-  // Load match criteria from localStorage
-  useEffect(() => {
-    const savedGender = localStorage.getItem("snappairMatchGender");
-    const savedCountry = localStorage.getItem("snappairMatchCountry");
-    const savedInterests = localStorage.getItem("snappairMatchInterests");
+  const [showGenderModal, setShowGenderModal] = useState(false);
+  const [showCountryModal, setShowCountryModal] = useState(false);
+  const [showGameModal, setShowGameModal] = useState(false);
 
-    setMatchCriteria({
-      gender: savedGender && savedGender !== "all" ? savedGender : null,
-      country: savedCountry || null,
-      interests: savedInterests ? JSON.parse(savedInterests) : [],
-    });
+  // Initialize anonymous user
+  useEffect(() => {
+    const initializeUser = async () => {
+      const user = await getOrCreateAnonymousUser();
+      if (user) {
+        setAnonymousUser(user);
+        console.log("📝 Anonymous user initialized:", user.anonymousId);
+      }
+    };
+    initializeUser();
   }, []);
 
-  // Helper function to build search profile consistently
-  const buildSearchProfile = useCallback(() => {
-    return {
-      userGender: localStorage.getItem("snappairUserGender"),
-      userLocation: localStorage.getItem("snappairUserLocation"),
-      matchGender: matchCriteria.gender || "all",
-      matchCountry: matchCriteria.country,
-      matchInterest: matchCriteria.interests,
+  // Load match criteria from localStorage
+  useEffect(() => {
+    const loadCriteria = () => {
+      const savedGender = localStorage.getItem("snappairGenderFilter");
+      const savedCountry = localStorage.getItem("snappairCountryFilter");
+      const savedInterests = localStorage.getItem("snappairInterestFilter");
+
+      setMatchCriteria({
+        gender: savedGender && savedGender !== "all" ? savedGender : null,
+        country: savedCountry || null,
+        interests: savedInterests ? JSON.parse(savedInterests) : [],
+      });
     };
+    loadCriteria();
+  }, []);
+
+  // Interest synchronization
+  useEffect(() => {
+    const interestsParam = searchParams.get("interests");
+    if (interestsParam) {
+      const urlInterests = interestsParam
+        .split(",")
+        .map((i) => i.trim())
+        .filter(Boolean);
+      setInterests(urlInterests);
+      localStorage.setItem("userInterests", JSON.stringify(urlInterests));
+    } else {
+      const savedInterests = localStorage.getItem("userInterests");
+      if (savedInterests) {
+        try {
+          const parsed = JSON.parse(savedInterests);
+          if (Array.isArray(parsed)) {
+            setInterests(parsed);
+          }
+        } catch (error) {
+          console.error("Error parsing saved interests:", error);
+        }
+      }
+    }
+  }, [searchParams]);
+
+  // Modal handlers
+  const handleOpenModal = (modalType: "gender" | "country" | "game") => {
+    handleStopSearch();
+    switch (modalType) {
+      case "gender":
+        setShowGenderModal(true);
+        break;
+      case "country":
+        setShowCountryModal(true);
+        break;
+      case "game":
+        setShowGameModal(true);
+        break;
+    }
+  };
+
+  const handleCloseModal = (modalType: "gender" | "country" | "game") => {
+    switch (modalType) {
+      case "gender":
+        setShowGenderModal(false);
+        break;
+      case "country":
+        setShowCountryModal(false);
+        break;
+      case "game":
+        setShowGameModal(false);
+        break;
+    }
+  };
+
+  const handleModalOutsideClick = (e: React.MouseEvent, modalType: string) => {
+    if (e.target === e.currentTarget) {
+      switch (modalType) {
+        case "gender":
+          setShowGenderModal(false);
+          break;
+        case "country":
+          setShowCountryModal(false);
+          break;
+        case "game":
+          setShowGameModal(false);
+          break;
+      }
+    }
+  };
+
+  // Preference change handlers
+  const handleGenderChange = useCallback(
+    (gender: string) => {
+      const updatedCriteria = {
+        ...matchCriteria,
+        gender: gender === "all" ? null : gender,
+      };
+      setMatchCriteria(updatedCriteria);
+    },
+    [matchCriteria]
+  );
+
+  const handleCountryChange = useCallback(
+    (country: string | null) => {
+      const updatedCriteria = {
+        ...matchCriteria,
+        country,
+      };
+      setMatchCriteria(updatedCriteria);
+    },
+    [matchCriteria]
+  );
+
+  const handleGameChange = useCallback(
+    (gameId: string, isSelected: boolean) => {
+      let newInterests: string[];
+      if (isSelected) {
+        newInterests = [...matchCriteria.interests, gameId];
+      } else {
+        newInterests = matchCriteria.interests.filter((g) => g !== gameId);
+      }
+
+      const updatedCriteria = {
+        ...matchCriteria,
+        interests: newInterests,
+      };
+      setMatchCriteria(updatedCriteria);
+    },
+    [matchCriteria]
+  );
+
+  const handleClearAllGames = useCallback(() => {
+    const updatedCriteria = {
+      ...matchCriteria,
+      interests: [],
+    };
+    setMatchCriteria(updatedCriteria);
   }, [matchCriteria]);
 
-  // Phase 6: Partner Disconnection Handler
+  const handleStopSearch = useCallback(() => {
+    if (socketRef.current && isLookingForPartner) {
+      socketRef.current.emit("stopChat");
+      setIsLookingForPartner(false);
+      setConnectionState((prev) => ({ ...prev, queue: "not_in_queue" }));
+      console.log("🛑 Search stopped by user");
+    }
+  }, [isLookingForPartner]);
+
+  // Partner disconnection handler
   const handlePartnerDisconnection = useCallback(
     (reason: string, skipAutoSearch: boolean = false) => {
-      console.log("🔌 Phase 6: Handling partner disconnection -", reason);
+      console.log("🔌 Partner disconnected:", reason);
 
-      // Show visual disconnection alert modal
       setShowDisconnectionAlert(true);
       setTimeout(() => {
         setShowDisconnectionAlert(false);
       }, 2000);
 
-      // 1. Disconnection Detection - Clean up connection resources
       if (peerRef.current) {
-        console.log("✅ Cleaning up SimplePeer connection resources");
         peerRef.current.destroy();
         peerRef.current = null;
       }
 
-      // Clear partner audio immediately
       if (remoteAudioRef.current) {
-        console.log("✅ Clearing partner audio immediately");
         remoteAudioRef.current.srcObject = null;
       }
 
-      // 2. Auto-Search Activation - Conditionally re-enter matching queue
+      setMatchReason(null);
       setPartnerId(null);
       setSessionId(null);
 
       if (!skipAutoSearch) {
-        console.log("✅ Auto-search activation - re-entering matching queue");
         setIsLookingForPartner(true);
         setDisconnectionMessage(`${reason} - Looking for new stranger...`);
-
-        // Update connection status
         setConnectionState((prev) => ({
           ...prev,
           peer: "not_initialized",
           queue: "searching",
         }));
 
-        // Start new search automatically with a small delay to prevent cascade
         setTimeout(() => {
           if (socketRef.current?.connected) {
-            const searchProfile = buildSearchProfile();
-            console.log("🔍 Auto-searching with profile:", searchProfile);
-            socketRef.current.emit(
-              "find-partner",
-              searchProfile,
-              (response: any) => {
-                console.log("📨 Auto-search find-partner response:", response);
-              }
-            );
+            const profile = {
+              userGender: localStorage.getItem("snappairUserGender") || null,
+              userLocation:
+                localStorage.getItem("snappairUserLocation") || null,
+              matchGender: matchCriteria.gender || "all",
+              matchLocation: matchCriteria.country || null,
+              matchGames: matchCriteria.interests || [],
+            };
+
+            socketRef.current.emit("find-partner", profile, (response: any) => {
+              console.log("📨 Auto-search response:", response);
+            });
           }
         }, 1000);
 
-        // Clear disconnection message after 5 seconds
         setTimeout(() => {
           setDisconnectionMessage(null);
         }, 5000);
       } else {
-        console.log("⏸️ Skipping auto-search to prevent cascade");
         setIsLookingForPartner(false);
         setDisconnectionMessage(
           `${reason} - Click START to find a new stranger.`
         );
-
-        // Update connection status to idle
         setConnectionState((prev) => ({
           ...prev,
           peer: "not_initialized",
           queue: "not_in_queue",
         }));
 
-        // Clear message after longer delay
         setTimeout(() => {
           setDisconnectionMessage(null);
         }, 8000);
       }
-
-      console.log("✅ Phase 6 complete: Auto-search activated, UI updated");
     },
-    [buildSearchProfile]
+    [matchCriteria]
   );
 
+  // Initialize socket
   const initializeSocket = useCallback(() => {
-    console.log("🔌 Initializing socket connection...");
-
     if (socketRef.current?.connected) {
-      console.log("✅ Socket already connected");
       return;
     }
 
@@ -204,12 +364,14 @@ export default function SimplePeerVoiceChat({
       console.log("🎯 Partner found:", data);
       setPartnerId(data.partnerId);
       setSessionId(data.sessionId);
-      setIsLookingForPartner(false); // Stop looking for partner
+      setIsLookingForPartner(false);
       setConnectionState((prev) => ({ ...prev, queue: "matched" }));
 
-      // Use data directly instead of state
-      const isInitiator = data.isInitiator;
-      initializePeerWithData(isInitiator, data.partnerId, data.sessionId);
+      if (data.matchReason) {
+        setMatchReason(data.matchReason);
+      }
+
+      initializePeerWithData(data.isInitiator, data.partnerId, data.sessionId);
     });
 
     socketRef.current.on("webrtc-signal", (data) => {
@@ -219,12 +381,7 @@ export default function SimplePeerVoiceChat({
       }
     });
 
-    // Phase 6: Partner Disconnection Handling
     socketRef.current.on("partner-disconnected", (data) => {
-      console.log(
-        "🔌 Phase 6: Partner disconnected - handling disconnection",
-        data
-      );
       const skipAutoSearch = data?.skipAutoSearch || false;
       const reason = data?.reason || "Partner disconnected";
       handlePartnerDisconnection(reason, skipAutoSearch);
@@ -233,17 +390,13 @@ export default function SimplePeerVoiceChat({
     setConnectionState((prev) => ({ ...prev, socket: "connecting" }));
   }, [handlePartnerDisconnection]);
 
+  // Initialize peer connection
   const initializePeerWithData = useCallback(
     (isInitiator: boolean, partnerIdParam: string, sessionIdParam: string) => {
-      console.log(
-        "🔗 Initializing SimplePeer connection for voice chat, initiator:",
-        isInitiator,
-        "partnerId:",
-        partnerIdParam
-      );
+      console.log("🔗 Initializing voice peer connection");
 
       if (!localStreamRef.current) {
-        console.error("❌ No local stream available for peer connection");
+        console.error("❌ No local stream available");
         return;
       }
 
@@ -264,37 +417,18 @@ export default function SimplePeerVoiceChat({
       });
 
       peerRef.current.on("signal", (signal) => {
-        console.log(
-          "📤 Sending signal to partner via socket, partnerId:",
-          partnerIdParam
-        );
         if (socketRef.current && partnerIdParam) {
-          socketRef.current.emit(
-            "webrtc-signal",
-            {
-              partnerId: partnerIdParam,
-              sessionId: sessionIdParam,
-              signal,
-              type: signal.type || "signal",
-            },
-            (ack: any) => {
-              console.log("📨 Signal acknowledgment:", ack);
-            }
-          );
-        } else {
-          console.error(
-            "❌ Cannot send signal - missing partnerId or socket:",
-            {
-              hasSocket: !!socketRef.current,
-              partnerId: partnerIdParam,
-              sessionId: sessionIdParam,
-            }
-          );
+          socketRef.current.emit("webrtc-signal", {
+            partnerId: partnerIdParam,
+            sessionId: sessionIdParam,
+            signal,
+            type: signal.type || "signal",
+          });
         }
       });
 
       peerRef.current.on("connect", () => {
-        console.log("🎉 SimplePeer voice chat connection established!");
+        console.log("🎉 Voice connection established!");
         setConnectionState((prev) => ({ ...prev, peer: "connected" }));
       });
 
@@ -308,7 +442,6 @@ export default function SimplePeerVoiceChat({
       peerRef.current.on("error", (err) => {
         console.error("❌ SimplePeer error:", err);
         setConnectionState((prev) => ({ ...prev, peer: "failed" }));
-        // Phase 6: Handle unexpected disconnections
         if (partnerId) {
           handlePartnerDisconnection("Connection error occurred", false);
         }
@@ -317,7 +450,6 @@ export default function SimplePeerVoiceChat({
       peerRef.current.on("close", () => {
         console.log("🔌 SimplePeer connection closed");
         setConnectionState((prev) => ({ ...prev, peer: "not_initialized" }));
-        // Phase 6: Handle WebRTC connection closure
         if (partnerId) {
           handlePartnerDisconnection("Connection closed", false);
         }
@@ -328,6 +460,7 @@ export default function SimplePeerVoiceChat({
     [handlePartnerDisconnection, partnerId]
   );
 
+  // Initialize media
   const initializeMedia = useCallback(async () => {
     console.log("🎤 Initializing audio devices...");
 
@@ -359,8 +492,9 @@ export default function SimplePeerVoiceChat({
     }
   }, []);
 
+  // Start search
   const startSearch = useCallback(() => {
-    console.log("🔍 Starting partner search for voice chat...");
+    console.log("🔍 Starting voice partner search...");
 
     if (!socketRef.current?.connected) {
       console.error("❌ Socket not connected");
@@ -370,125 +504,92 @@ export default function SimplePeerVoiceChat({
     setIsLookingForPartner(true);
     setConnectionState((prev) => ({ ...prev, queue: "searching" }));
 
-    // Include match criteria in the search
-    const searchProfile = {
-      userGender: localStorage.getItem("snappairUserGender"),
-      userLocation: localStorage.getItem("snappairUserLocation"),
+    const profile = {
+      userGender: localStorage.getItem("snappairUserGender") || null,
+      userLocation: localStorage.getItem("snappairUserLocation") || null,
       matchGender: matchCriteria.gender || "all",
-      matchCountry: matchCriteria.country,
-      matchInterest:
-        matchCriteria.interests.length > 0
-          ? matchCriteria.interests
-          : interests,
+      matchLocation: matchCriteria.country || null,
+      matchGames: matchCriteria.interests || [],
     };
 
-    console.log("🔍 Voice chat searching with profile:", searchProfile);
+    console.log("🔍 Sending voice profile to server:", profile);
 
-    socketRef.current.emit("find-partner", searchProfile, (response: any) => {
+    socketRef.current.emit("find-partner", profile, (response: any) => {
       console.log("📨 Find-partner response:", response);
     });
-  }, [interests, matchCriteria]);
+  }, [matchCriteria]);
 
-  // Handle match criteria updates
-  const handleCriteriaUpdate = useCallback(
-    (newCriteria: any) => {
-      setMatchCriteria(newCriteria);
+  // Handle Done button from modals
+  const handleDone = useCallback(() => {
+    setShowGenderModal(false);
+    setShowCountryModal(false);
+    setShowGameModal(false);
 
-      // Restart search with new criteria if currently searching
-      if (isLookingForPartner) {
-        setTimeout(() => {
-          startSearch();
-        }, 100);
-      }
-    },
-    [isLookingForPartner, startSearch]
-  );
+    setTimeout(() => {
+      startSearch();
+    }, 500);
+  }, [startSearch]);
 
-  const handleStopSearch = useCallback(() => {
-    if (socketRef.current && isLookingForPartner) {
-      socketRef.current.emit("cancel-search");
-      setIsLookingForPartner(false);
-      setConnectionState((prev) => ({ ...prev, queue: "not_in_queue" }));
-    }
-  }, [isLookingForPartner]);
-
-  // Phase 5A: NEXT Button Click (Find New Partner)
+  // Find next partner
   const findNextPartner = useCallback(() => {
-    console.log("🔄 Phase 5A: Finding next partner...");
+    console.log("🔄 Finding next partner...");
 
-    // Current Connection Cleanup
     if (peerRef.current) {
-      console.log("✅ Closing SimplePeer connection via destroy()");
       peerRef.current.destroy();
       peerRef.current = null;
     }
 
-    // Clear remote audio element
     if (remoteAudioRef.current) {
-      console.log("✅ Clearing remote audio element");
       remoteAudioRef.current.srcObject = null;
     }
 
-    // Log session end (in a real app, this would log to database)
-    console.log("✅ Logging session end for partner:", partnerId);
-
-    // Re-queue Process
+    setMatchReason(null);
     setPartnerId(null);
     setSessionId(null);
     setConnectionState((prev) => ({
       ...prev,
       peer: "not_initialized",
-      queue: "searching", // Update UI to "searching" state
+      queue: "searching",
     }));
 
-    // Add user back to matching queue & Start new matching process
-    console.log("✅ Adding user back to matching queue");
     setIsLookingForPartner(true);
 
     if (socketRef.current?.connected) {
-      const searchProfile = buildSearchProfile();
-      console.log("🔍 Next partner search with profile:", searchProfile);
-      socketRef.current.emit("find-partner", searchProfile, (response: any) => {
-        console.log("📨 Re-queue find-partner response:", response);
+      const profile = {
+        userGender: localStorage.getItem("snappairUserGender") || null,
+        userLocation: localStorage.getItem("snappairUserLocation") || null,
+        matchGender: matchCriteria.gender || "all",
+        matchLocation: matchCriteria.country || null,
+        matchGames: matchCriteria.interests || [],
+      };
+
+      socketRef.current.emit("find-partner", profile, (response: any) => {
+        console.log("📨 Re-queue response:", response);
       });
     }
+  }, [matchCriteria]);
 
-    // Button State Management happens automatically via state changes
-    console.log(
-      "✅ Button state updated: NEXT hidden, STOP enabled, searching indicator shown"
-    );
-  }, [partnerId, buildSearchProfile]);
-
-  // Phase 5B: STOP Button Click (Complete Termination)
+  // Stop session
   const stopSession = useCallback(() => {
-    console.log("🛑 Phase 5B: Complete session termination...");
+    console.log("🛑 Complete session termination...");
 
-    // Complete Cleanup
     if (peerRef.current) {
-      console.log("✅ Closing SimplePeer connection");
       peerRef.current.destroy();
       peerRef.current = null;
     }
 
-    // Stop all media streams (keep local stream for potential restart)
     if (remoteAudioRef.current) {
-      console.log("✅ Clearing remote audio element");
       remoteAudioRef.current.srcObject = null;
     }
 
-    // 🔧 FIX: Notify partner about disconnection BEFORE stopping
     if (partnerId && socketRef.current?.connected) {
-      console.log("✅ Notifying partner about STOP disconnection");
       socketRef.current.emit("stopChat");
     }
 
-    // Remove from matching queue
     if (socketRef.current?.connected) {
-      console.log("✅ Removing from matching queue");
       socketRef.current.emit("leave-queue");
     }
 
-    // UI Reset
     setPartnerId(null);
     setSessionId(null);
     setIsLookingForPartner(false);
@@ -499,25 +600,10 @@ export default function SimplePeerVoiceChat({
       queue: "not_in_queue",
     }));
 
-    console.log("✅ Session completely terminated - UI reset to initial state");
-    console.log("✅ START button will show, NEXT and STOP buttons hidden");
+    setMatchReason(null);
   }, [partnerId]);
 
-  // Interest management functions
-  const addInterest = useCallback(() => {
-    if (currentInterest.trim() && !interests.includes(currentInterest.trim())) {
-      setInterests((prev) => [...prev, currentInterest.trim()]);
-      setCurrentInterest("");
-    }
-  }, [currentInterest, interests]);
-
-  const removeInterest = useCallback((interestToRemove: string) => {
-    setInterests((prev) =>
-      prev.filter((interest) => interest !== interestToRemove)
-    );
-  }, []);
-
-  // Mute/Unmute functionality
+  // Toggle mute
   const toggleMute = useCallback(() => {
     if (localStreamRef.current) {
       const audioTracks = localStreamRef.current.getAudioTracks();
@@ -528,6 +614,7 @@ export default function SimplePeerVoiceChat({
     }
   }, [isMuted]);
 
+  // Initialize on mount
   useEffect(() => {
     initializeSocket();
     initializeMedia();
@@ -553,42 +640,91 @@ export default function SimplePeerVoiceChat({
     <div className="h-screen pt-16 pb-10 flex flex-col">
       <div className="container mx-auto px-4 flex-grow flex flex-col">
         <div className="flex flex-col lg:flex-row gap-4 h-[75vh]">
-          {/* User Audio */}
+          {/* Left Side - Voice Controls Interface */}
           <div className="relative rounded-3xl overflow-hidden flex-1 bg-snappair-primary">
             <div className="absolute left-5 top-5 z-10 bg-black/40 rounded-full px-3 py-1 flex items-center">
               <div className="w-3 h-3 rounded-full mr-2 bg-snappair-green"></div>
               <span className="text-snappair-green text-sm font-medium">
-                YOU
+                YOUR VOICE
               </span>
             </div>
 
             {/* Audio Elements (hidden) */}
             <audio ref={localAudioRef} autoPlay muted />
 
-            {/* User Audio Visualization */}
+            {/* Voice Control Area */}
             <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
-              <div className="text-6xl mb-4">🎤</div>
-              <div className="text-xl font-semibold mb-2">Voice Chat</div>
-              <div className="text-gray-300 mb-4">
-                Microphone:{" "}
-                {mediaDeviceStatus.microphone ? "✅ Ready" : "❌ Not Available"}
-              </div>
-              {isConnected && (
-                <button
-                  onClick={toggleMute}
-                  className={`px-6 py-3 rounded-lg font-semibold transition-colors ${
-                    isMuted
-                      ? "bg-red-600 hover:bg-red-700 text-white"
-                      : "bg-green-600 hover:bg-green-700 text-white"
+              <div className="text-center mb-8">
+                <div
+                  className={`text-8xl mb-6 ${
+                    isConnected ? "animate-pulse" : ""
                   }`}
                 >
-                  {isMuted ? "🔇 Unmute" : "🎤 Mute"}
-                </button>
+                  {isMuted ? "🔇" : "🎤"}
+                </div>
+                <h2 className="text-3xl font-bold mb-4">Voice Chat</h2>
+                <p className="text-lg text-white/80 mb-6">
+                  Microphone:{" "}
+                  {mediaDeviceStatus.microphone
+                    ? "✅ Ready"
+                    : "❌ Not Available"}
+                </p>
+              </div>
+
+              {/* Voice Controls */}
+              {isConnected && (
+                <div className="space-y-4">
+                  <button
+                    onClick={toggleMute}
+                    className={`px-8 py-4 rounded-full font-semibold text-lg transition-all duration-200 ${
+                      isMuted
+                        ? "bg-red-600 hover:bg-red-700 text-white shadow-lg"
+                        : "bg-green-600 hover:bg-green-700 text-white shadow-lg"
+                    }`}
+                  >
+                    {isMuted ? "🔇 Unmute" : "🎤 Mute"}
+                  </button>
+
+                  {/* Audio Status Indicator */}
+                  <div className="bg-black/20 rounded-lg p-4 backdrop-blur-sm">
+                    <div className="flex items-center justify-center text-white/80 text-sm">
+                      <div
+                        className={`w-2 h-2 rounded-full mr-2 ${
+                          isMuted ? "bg-red-400" : "bg-green-400"
+                        } animate-pulse`}
+                      ></div>
+                      <span>
+                        {isMuted ? "Microphone Muted" : "Voice Active"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Voice Visualization */}
+              {!isConnected && (
+                <div className="bg-black/20 rounded-lg p-6 backdrop-blur-sm">
+                  <div className="flex items-center space-x-2">
+                    {[...Array(5)].map((_, i) => (
+                      <div
+                        key={i}
+                        className={`w-1 bg-blue-400 rounded-full animate-pulse`}
+                        style={{
+                          height: `${Math.random() * 40 + 20}px`,
+                          animationDelay: `${i * 0.1}s`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <p className="text-center text-white/60 text-sm mt-3">
+                    Ready for voice connection
+                  </p>
+                </div>
               )}
             </div>
           </div>
 
-          {/* Stranger Audio */}
+          {/* Right Side - Connection Status */}
           <div className="relative rounded-3xl overflow-hidden flex-1 bg-snappair-primary">
             <div className="absolute right-5 top-5 z-10 bg-black/40 rounded-full px-3 py-1 flex items-center">
               <div className="w-3 h-3 rounded-full bg-snappair-green mr-2"></div>
@@ -600,15 +736,23 @@ export default function SimplePeerVoiceChat({
             {/* Audio Elements (hidden) */}
             <audio ref={remoteAudioRef} autoPlay />
 
-            {/* Stranger Audio Visualization */}
+            {/* Connection Area */}
             {isLookingForPartner ? (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-white bg-zinc-900">
                 <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-white mb-4"></div>
-                <p className="text-xl mb-6">
-                  Finding your voice chat partner...
-                </p>
+                <p className="text-xl mb-6">Finding your voice partner...</p>
 
-                {/* People animation background */}
+                {/* Match Criteria Controls */}
+                <div className="mb-6 z-20">
+                  <MatchCriteriaControls
+                    isVisible={true}
+                    currentCriteria={matchCriteria}
+                    onOpenModal={handleOpenModal}
+                    onStopSearch={handleStopSearch}
+                  />
+                </div>
+
+                {/* Background animation */}
                 <div className="absolute inset-0 overflow-hidden -z-10">
                   <div
                     className="absolute inset-0"
@@ -622,14 +766,6 @@ export default function SimplePeerVoiceChat({
                   />
                 </div>
 
-                {/* Match Criteria Controls - shown while searching */}
-                <MatchCriteriaControls
-                  currentCriteria={matchCriteria}
-                  onCriteriaUpdate={handleCriteriaUpdate}
-                  onStopSearch={handleStopSearch}
-                  isVisible={isLookingForPartner}
-                />
-
                 <style jsx>{`
                   @keyframes pan {
                     from {
@@ -641,181 +777,78 @@ export default function SimplePeerVoiceChat({
                   }
                 `}</style>
               </div>
+            ) : isConnected ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-white bg-gradient-to-br from-purple-900/50 to-pink-900/50">
+                <div className="text-8xl mb-6 animate-pulse">🔊</div>
+                <h2 className="text-3xl font-bold mb-4">Voice Connected!</h2>
+                <p className="text-lg mb-6 text-center max-w-md">
+                  You're now in a voice chat with a stranger. Speak clearly and
+                  enjoy your conversation!
+                </p>
+
+                {/* Partner Info */}
+                <div className="bg-black/20 rounded-lg p-4 backdrop-blur-sm mb-4">
+                  <div className="flex items-center text-white/80 text-sm">
+                    <div className="w-2 h-2 rounded-full bg-green-400 mr-2 animate-pulse"></div>
+                    <span>Partner ID: {partnerId?.substring(0, 8)}...</span>
+                  </div>
+                </div>
+
+                {/* Voice Level Indicator */}
+                <div className="bg-black/20 rounded-lg p-4 backdrop-blur-sm">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-white/60 text-sm mr-3">
+                      Voice Level:
+                    </span>
+                    {[...Array(8)].map((_, i) => (
+                      <div
+                        key={i}
+                        className="w-1 bg-gradient-to-t from-green-400 to-blue-400 rounded-full animate-pulse"
+                        style={{
+                          height: `${Math.random() * 30 + 10}px`,
+                          animationDelay: `${i * 0.15}s`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
             ) : (
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
-                {isConnected ? (
-                  <>
-                    <div className="text-6xl mb-4">🔊</div>
-                    <div className="text-xl font-semibold mb-2">
-                      Voice Chat Active
-                    </div>
-                    <div className="text-gray-300">
-                      Connected to: {partnerId}
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-6xl mb-4 opacity-50">🔊</div>
-                    <div className="text-gray-400 text-lg">
-                      Waiting for connection...
-                    </div>
-                  </>
-                )}
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-white bg-gradient-to-br from-gray-800 to-gray-900">
+                <div className="text-8xl mb-6 opacity-50">🎧</div>
+                <h2 className="text-2xl font-bold mb-4">Ready for Voice</h2>
+                <p className="text-lg text-center max-w-md text-white/70">
+                  Click START to find someone to talk with!
+                </p>
+              </div>
+            )}
+
+            {/* Match Reason Display */}
+            {matchReason && isConnected && (
+              <div className="absolute bottom-3 left-3 right-3 bg-black/60 backdrop-blur-sm rounded-lg px-3 py-2 z-10">
+                <div className="flex items-center text-white text-sm">
+                  <div className="w-2 h-2 rounded-full bg-snappair-green mr-2 animate-pulse"></div>
+                  <span className="font-medium text-snappair-green">
+                    Match:
+                  </span>
+                  <span className="ml-2 text-white">{matchReason}</span>
+                </div>
               </div>
             )}
           </div>
         </div>
 
-        {/* Phase 6: Disconnection Message Display */}
+        {/* Disconnection Message */}
         {disconnectionMessage && (
           <div className="bg-orange-600 rounded-lg p-4 mb-6 text-center">
             <div className="flex items-center justify-center gap-2">
               <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-              <span className="text-lg font-semibold">
+              <span className="text-lg font-semibold text-white">
                 {disconnectionMessage}
               </span>
             </div>
           </div>
         )}
-
-        {/* 🚨 ENHANCED: Modal-style Disconnection Alert */}
-        {showDisconnectionAlert && (
-          <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
-            <div className="bg-red-600 text-white p-8 rounded-xl shadow-2xl max-w-md w-full mx-4 text-center animate-pulse">
-              <div className="text-6xl mb-4">⚠️</div>
-              <h2 className="text-2xl font-bold mb-4">Partner Disconnected!</h2>
-              <p className="text-lg mb-4">
-                Your partner has left the voice chat.
-              </p>
-              <p className="text-md">
-                Automatically searching for a new stranger...
-              </p>
-              <div className="mt-6">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto"></div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-          {/* Interests Section */}
-          <div className="bg-gray-800 rounded-lg p-4">
-            <h3 className="text-lg font-semibold mb-3">Interests (Optional)</h3>
-            <div className="mb-3">
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={currentInterest}
-                  onChange={(e) => setCurrentInterest(e.target.value)}
-                  onKeyPress={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      addInterest();
-                    }
-                  }}
-                  placeholder="Add an interest..."
-                  disabled={isLookingForPartner || isConnected}
-                  className="flex-1 px-3 py-2 bg-gray-700 text-white rounded-lg border border-gray-600 focus:border-blue-500 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-                />
-                <button
-                  onClick={addInterest}
-                  disabled={
-                    !currentInterest.trim() ||
-                    isLookingForPartner ||
-                    isConnected
-                  }
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg font-semibold transition-colors"
-                >
-                  Add
-                </button>
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2 min-h-[120px]">
-              {interests.length === 0 ? (
-                <div className="text-gray-400 text-sm text-center w-full mt-8">
-                  No interests added. Leave empty for random matching.
-                </div>
-              ) : (
-                interests.map((interest) => (
-                  <span
-                    key={interest}
-                    className="px-3 py-1 bg-blue-600 text-white rounded-full text-sm flex items-center gap-2"
-                  >
-                    {interest}
-                    {!isLookingForPartner && !isConnected && (
-                      <button
-                        onClick={() => removeInterest(interest)}
-                        className="hover:bg-blue-700 rounded-full w-5 h-5 flex items-center justify-center text-xs"
-                      >
-                        ×
-                      </button>
-                    )}
-                  </span>
-                ))
-              )}
-            </div>
-            <div className="mt-3 text-xs text-gray-400">
-              {interests.length > 0
-                ? "Will match with people who share similar interests"
-                : "Leave empty to match with random strangers"}
-            </div>
-          </div>
-
-          {/* Voice Controls Section */}
-          <div className="bg-gray-800 rounded-lg p-4">
-            <h3 className="text-lg font-semibold mb-3">
-              {isConnected
-                ? "Voice Chat Active"
-                : "Voice Chat (Connect to enable)"}
-            </h3>
-
-            {/* Audio Elements (hidden) */}
-            <audio ref={localAudioRef} autoPlay muted />
-            <audio ref={remoteAudioRef} autoPlay />
-
-            <div className="h-64 bg-gray-700 rounded-lg p-6 mb-3 flex flex-col items-center justify-center">
-              {isConnected ? (
-                <div className="text-center">
-                  <div className="text-6xl mb-4">🎤</div>
-                  <div className="text-xl font-semibold mb-2">
-                    Voice Chat Active
-                  </div>
-                  <div className="text-gray-300 mb-4">
-                    Connected to: {partnerId}
-                  </div>
-                  <button
-                    onClick={toggleMute}
-                    className={`px-6 py-3 rounded-lg font-semibold transition-colors ${
-                      isMuted
-                        ? "bg-red-600 hover:bg-red-700 text-white"
-                        : "bg-green-600 hover:bg-green-700 text-white"
-                    }`}
-                  >
-                    {isMuted ? "🔇 Unmute" : "🎤 Mute"}
-                  </button>
-                </div>
-              ) : (
-                <div className="text-center">
-                  <div className="text-6xl mb-4 opacity-50">🎤</div>
-                  <div className="text-gray-400 text-lg">
-                    {isSearching
-                      ? "Searching for voice chat partner..."
-                      : "Connect with a partner to start voice chat"}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="text-sm text-gray-400 text-center">
-              Microphone:{" "}
-              {mediaDeviceStatus.microphone ? "✅ Ready" : "❌ Not Available"}
-              {isConnected && (
-                <span className="ml-4">
-                  Status: {isMuted ? "🔇 Muted" : "🎤 Active"}
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
 
         {/* Control Buttons */}
         <div className="flex items-center justify-center gap-3 my-4">
@@ -839,9 +872,7 @@ export default function SimplePeerVoiceChat({
               <span className="text-lg text-white">
                 {disconnectionMessage
                   ? "Looking for new stranger..."
-                  : interests.length > 0
-                  ? `Searching for partner with similar interests...`
-                  : "Searching for random partner..."}
+                  : "Searching for voice partner..."}
               </span>
               <button
                 onClick={stopSession}
@@ -894,6 +925,55 @@ export default function SimplePeerVoiceChat({
                 </svg>
                 Next
               </button>
+
+              {/* Mute Toggle Button */}
+              <button
+                onClick={toggleMute}
+                className={`rounded-full w-12 h-12 flex items-center justify-center text-white transition-colors ${
+                  isMuted
+                    ? "bg-red-600 hover:bg-red-700"
+                    : "bg-green-600 hover:bg-green-700"
+                }`}
+                title={isMuted ? "Unmute" : "Mute"}
+              >
+                {isMuted ? (
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="h-6 w-6"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"
+                    />
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"
+                    />
+                  </svg>
+                ) : (
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="h-6 w-6"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
+                    />
+                  </svg>
+                )}
+              </button>
             </>
           )}
         </div>
@@ -904,9 +984,7 @@ export default function SimplePeerVoiceChat({
             <div className="bg-red-600 text-white p-8 rounded-xl shadow-2xl max-w-md w-full mx-4 text-center animate-pulse">
               <div className="text-6xl mb-4">⚠️</div>
               <h2 className="text-2xl font-bold mb-4">Partner Disconnected!</h2>
-              <p className="text-lg mb-4">
-                Your partner has left the voice chat.
-              </p>
+              <p className="text-lg mb-4">Your voice partner has left.</p>
               <p className="text-md">
                 Automatically searching for a new stranger...
               </p>
@@ -916,6 +994,29 @@ export default function SimplePeerVoiceChat({
             </div>
           </div>
         )}
+
+        {/* Preference Modals */}
+        <PreferenceModals
+          showGenderModal={showGenderModal}
+          showCountryModal={showCountryModal}
+          showGameModal={showGameModal}
+          matchPreferences={{
+            matchGender: matchCriteria.gender || "all",
+            matchCountry: matchCriteria.country,
+            matchInterest:
+              matchCriteria.interests.length > 0
+                ? matchCriteria.interests
+                : null,
+          }}
+          onGenderChange={handleGenderChange}
+          onCountryChange={handleCountryChange}
+          onGameChange={handleGameChange}
+          onClearAllGames={handleClearAllGames}
+          onCloseModal={handleCloseModal}
+          onModalOutsideClick={handleModalOutsideClick}
+          showDoneButton={true}
+          onDone={handleDone}
+        />
       </div>
     </div>
   );
