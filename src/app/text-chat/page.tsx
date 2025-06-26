@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import SimplePeerTextChat from "../../components/SimplePeerTextChat";
 import UserProfileModal from "../../components/UserProfileModal";
+import { Header } from "../../components/header";
 
 interface UserProfile {
   userGender: string;
@@ -96,21 +97,24 @@ export default function TextChat() {
 
   if (status === "loading" || !profileChecked) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
+      <div className="flex items-center justify-center min-h-screen bg-black">
         <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-500"></div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-100">
-      <UserProfileModal
-        isOpen={showProfileModal}
-        onClose={() => setShowProfileModal(false)}
-        onComplete={handleProfileComplete}
-      />
+    <div className="min-h-screen bg-black">
+      <Header />
+      <main>
+        <UserProfileModal
+          isOpen={showProfileModal}
+          onClose={() => setShowProfileModal(false)}
+          onComplete={handleProfileComplete}
+        />
 
-      {!showProfileModal && <SimplePeerTextChat />}
+        {!showProfileModal && <SimplePeerTextChat />}
+      </main>
     </div>
   );
 }

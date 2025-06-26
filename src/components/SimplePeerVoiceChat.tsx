@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
 import SimplePeer from "simple-peer";
+import { MatchCriteriaControls } from "./MatchCriteriaControls";
 
 interface ConnectionState {
   socket: "disconnected" | "connecting" | "connected";
@@ -61,6 +62,37 @@ export default function SimplePeerVoiceChat({
   const [currentInterest, setCurrentInterest] = useState("");
   const [isMuted, setIsMuted] = useState(false);
 
+  // Match criteria state
+  const [matchCriteria, setMatchCriteria] = useState({
+    gender: null as string | null,
+    country: null as string | null,
+    interests: [] as string[],
+  });
+
+  // Load match criteria from localStorage
+  useEffect(() => {
+    const savedGender = localStorage.getItem("snappairMatchGender");
+    const savedCountry = localStorage.getItem("snappairMatchCountry");
+    const savedInterests = localStorage.getItem("snappairMatchInterests");
+
+    setMatchCriteria({
+      gender: savedGender && savedGender !== "all" ? savedGender : null,
+      country: savedCountry || null,
+      interests: savedInterests ? JSON.parse(savedInterests) : [],
+    });
+  }, []);
+
+  // Helper function to build search profile consistently
+  const buildSearchProfile = useCallback(() => {
+    return {
+      userGender: localStorage.getItem("snappairUserGender"),
+      userLocation: localStorage.getItem("snappairUserLocation"),
+      matchGender: matchCriteria.gender || "all",
+      matchCountry: matchCriteria.country,
+      matchInterest: matchCriteria.interests,
+    };
+  }, [matchCriteria]);
+
   // Phase 6: Partner Disconnection Handler
   const handlePartnerDisconnection = useCallback(
     (reason: string, skipAutoSearch: boolean = false) => {
@@ -104,9 +136,11 @@ export default function SimplePeerVoiceChat({
         // Start new search automatically with a small delay to prevent cascade
         setTimeout(() => {
           if (socketRef.current?.connected) {
+            const searchProfile = buildSearchProfile();
+            console.log("🔍 Auto-searching with profile:", searchProfile);
             socketRef.current.emit(
               "find-partner",
-              interests,
+              searchProfile,
               (response: any) => {
                 console.log("📨 Auto-search find-partner response:", response);
               }
@@ -140,7 +174,7 @@ export default function SimplePeerVoiceChat({
 
       console.log("✅ Phase 6 complete: Auto-search activated, UI updated");
     },
-    [interests]
+    [buildSearchProfile]
   );
 
   const initializeSocket = useCallback(() => {
@@ -170,6 +204,7 @@ export default function SimplePeerVoiceChat({
       console.log("🎯 Partner found:", data);
       setPartnerId(data.partnerId);
       setSessionId(data.sessionId);
+      setIsLookingForPartner(false); // Stop looking for partner
       setConnectionState((prev) => ({ ...prev, queue: "matched" }));
 
       // Use data directly instead of state
@@ -335,10 +370,47 @@ export default function SimplePeerVoiceChat({
     setIsLookingForPartner(true);
     setConnectionState((prev) => ({ ...prev, queue: "searching" }));
 
-    socketRef.current.emit("find-partner", interests, (response: any) => {
+    // Include match criteria in the search
+    const searchProfile = {
+      userGender: localStorage.getItem("snappairUserGender"),
+      userLocation: localStorage.getItem("snappairUserLocation"),
+      matchGender: matchCriteria.gender || "all",
+      matchCountry: matchCriteria.country,
+      matchInterest:
+        matchCriteria.interests.length > 0
+          ? matchCriteria.interests
+          : interests,
+    };
+
+    console.log("🔍 Voice chat searching with profile:", searchProfile);
+
+    socketRef.current.emit("find-partner", searchProfile, (response: any) => {
       console.log("📨 Find-partner response:", response);
     });
-  }, [interests]);
+  }, [interests, matchCriteria]);
+
+  // Handle match criteria updates
+  const handleCriteriaUpdate = useCallback(
+    (newCriteria: any) => {
+      setMatchCriteria(newCriteria);
+
+      // Restart search with new criteria if currently searching
+      if (isLookingForPartner) {
+        setTimeout(() => {
+          startSearch();
+        }, 100);
+      }
+    },
+    [isLookingForPartner, startSearch]
+  );
+
+  const handleStopSearch = useCallback(() => {
+    if (socketRef.current && isLookingForPartner) {
+      socketRef.current.emit("cancel-search");
+      setIsLookingForPartner(false);
+      setConnectionState((prev) => ({ ...prev, queue: "not_in_queue" }));
+    }
+  }, [isLookingForPartner]);
 
   // Phase 5A: NEXT Button Click (Find New Partner)
   const findNextPartner = useCallback(() => {
@@ -374,7 +446,9 @@ export default function SimplePeerVoiceChat({
     setIsLookingForPartner(true);
 
     if (socketRef.current?.connected) {
-      socketRef.current.emit("find-partner", interests, (response: any) => {
+      const searchProfile = buildSearchProfile();
+      console.log("🔍 Next partner search with profile:", searchProfile);
+      socketRef.current.emit("find-partner", searchProfile, (response: any) => {
         console.log("📨 Re-queue find-partner response:", response);
       });
     }
@@ -383,7 +457,7 @@ export default function SimplePeerVoiceChat({
     console.log(
       "✅ Button state updated: NEXT hidden, STOP enabled, searching indicator shown"
     );
-  }, [partnerId, interests]);
+  }, [partnerId, buildSearchProfile]);
 
   // Phase 5B: STOP Button Click (Complete Termination)
   const stopSession = useCallback(() => {
@@ -476,54 +550,119 @@ export default function SimplePeerVoiceChat({
   const isSearching = connectionState.queue === "searching";
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-4">
-      <div className="w-full max-w-6xl">
-        <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold mb-2">SimplePeer Voice Chat</h1>
-          <p className="text-gray-400">
-            Connect with strangers for voice conversations
-          </p>
-        </div>
+    <div className="h-screen pt-16 pb-10 flex flex-col">
+      <div className="container mx-auto px-4 flex-grow flex flex-col">
+        <div className="flex flex-col lg:flex-row gap-4 h-[75vh]">
+          {/* User Audio */}
+          <div className="relative rounded-3xl overflow-hidden flex-1 bg-snappair-primary">
+            <div className="absolute left-5 top-5 z-10 bg-black/40 rounded-full px-3 py-1 flex items-center">
+              <div className="w-3 h-3 rounded-full mr-2 bg-snappair-green"></div>
+              <span className="text-snappair-green text-sm font-medium">
+                YOU
+              </span>
+            </div>
 
-        <div className="bg-gray-800 rounded-lg p-4 mb-6">
-          <h3 className="text-lg font-semibold mb-3">Connection Status</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-            <div
-              className={`p-2 rounded ${
-                connectionState.socket === "connected"
-                  ? "bg-green-600"
-                  : "bg-red-600"
-              }`}
-            >
-              Socket: {connectionState.socket}
+            {/* Audio Elements (hidden) */}
+            <audio ref={localAudioRef} autoPlay muted />
+
+            {/* User Audio Visualization */}
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
+              <div className="text-6xl mb-4">🎤</div>
+              <div className="text-xl font-semibold mb-2">Voice Chat</div>
+              <div className="text-gray-300 mb-4">
+                Microphone:{" "}
+                {mediaDeviceStatus.microphone ? "✅ Ready" : "❌ Not Available"}
+              </div>
+              {isConnected && (
+                <button
+                  onClick={toggleMute}
+                  className={`px-6 py-3 rounded-lg font-semibold transition-colors ${
+                    isMuted
+                      ? "bg-red-600 hover:bg-red-700 text-white"
+                      : "bg-green-600 hover:bg-green-700 text-white"
+                  }`}
+                >
+                  {isMuted ? "🔇 Unmute" : "🎤 Mute"}
+                </button>
+              )}
             </div>
-            <div
-              className={`p-2 rounded ${
-                connectionState.peer === "connected"
-                  ? "bg-green-600"
-                  : "bg-yellow-600"
-              }`}
-            >
-              Peer: {connectionState.peer}
+          </div>
+
+          {/* Stranger Audio */}
+          <div className="relative rounded-3xl overflow-hidden flex-1 bg-snappair-primary">
+            <div className="absolute right-5 top-5 z-10 bg-black/40 rounded-full px-3 py-1 flex items-center">
+              <div className="w-3 h-3 rounded-full bg-snappair-green mr-2"></div>
+              <span className="text-snappair-green text-sm font-medium">
+                {partnerId ? "STRANGER" : "CONNECTING..."}
+              </span>
             </div>
-            <div
-              className={`p-2 rounded ${
-                connectionState.media === "ready"
-                  ? "bg-green-600"
-                  : "bg-red-600"
-              }`}
-            >
-              Audio: {connectionState.media}
-            </div>
-            <div
-              className={`p-2 rounded ${
-                connectionState.queue === "matched"
-                  ? "bg-green-600"
-                  : "bg-yellow-600"
-              }`}
-            >
-              Queue: {connectionState.queue}
-            </div>
+
+            {/* Audio Elements (hidden) */}
+            <audio ref={remoteAudioRef} autoPlay />
+
+            {/* Stranger Audio Visualization */}
+            {isLookingForPartner ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-white bg-zinc-900">
+                <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-white mb-4"></div>
+                <p className="text-xl mb-6">
+                  Finding your voice chat partner...
+                </p>
+
+                {/* People animation background */}
+                <div className="absolute inset-0 overflow-hidden -z-10">
+                  <div
+                    className="absolute inset-0"
+                    style={{
+                      backgroundImage: "url('/people.webp')",
+                      backgroundSize: "cover",
+                      backgroundPosition: "center",
+                      opacity: 0.15,
+                      animation: "pan 25s infinite alternate ease-in-out",
+                    }}
+                  />
+                </div>
+
+                {/* Match Criteria Controls - shown while searching */}
+                <MatchCriteriaControls
+                  currentCriteria={matchCriteria}
+                  onCriteriaUpdate={handleCriteriaUpdate}
+                  onStopSearch={handleStopSearch}
+                  isVisible={isLookingForPartner}
+                />
+
+                <style jsx>{`
+                  @keyframes pan {
+                    from {
+                      transform: scale(1.2) translateX(-5%) translateY(-2%);
+                    }
+                    to {
+                      transform: scale(1.2) translateX(5%) translateY(2%);
+                    }
+                  }
+                `}</style>
+              </div>
+            ) : (
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
+                {isConnected ? (
+                  <>
+                    <div className="text-6xl mb-4">🔊</div>
+                    <div className="text-xl font-semibold mb-2">
+                      Voice Chat Active
+                    </div>
+                    <div className="text-gray-300">
+                      Connected to: {partnerId}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-6xl mb-4 opacity-50">🔊</div>
+                    <div className="text-gray-400 text-lg">
+                      Waiting for connection...
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -678,12 +817,13 @@ export default function SimplePeerVoiceChat({
           </div>
         </div>
 
-        <div className="flex justify-center gap-4">
+        {/* Control Buttons */}
+        <div className="flex items-center justify-center gap-3 my-4">
           {!isLookingForPartner && !isConnected && (
             <button
               onClick={startSearch}
               disabled={!canStart}
-              className={`px-8 py-3 rounded-lg font-semibold text-lg ${
+              className={`rounded-full px-6 py-3 flex items-center justify-center font-semibold text-lg ${
                 canStart
                   ? "bg-green-600 hover:bg-green-700 text-white"
                   : "bg-gray-600 text-gray-400 cursor-not-allowed"
@@ -693,10 +833,10 @@ export default function SimplePeerVoiceChat({
             </button>
           )}
 
-          {isSearching && (
+          {isLookingForPartner && (
             <div className="flex items-center gap-4">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-              <span className="text-lg">
+              <span className="text-lg text-white">
                 {disconnectionMessage
                   ? "Looking for new stranger..."
                   : interests.length > 0
@@ -705,7 +845,7 @@ export default function SimplePeerVoiceChat({
               </span>
               <button
                 onClick={stopSession}
-                className="px-6 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-semibold"
+                className="px-6 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-semibold text-white"
               >
                 STOP
               </button>
@@ -713,23 +853,69 @@ export default function SimplePeerVoiceChat({
           )}
 
           {isConnected && (
-            <div className="flex items-center gap-4">
-              <span className="text-lg text-green-400">✅ Connected!</span>
-              <button
-                onClick={findNextPartner}
-                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold"
-              >
-                NEXT
-              </button>
+            <>
               <button
                 onClick={stopSession}
-                className="px-6 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-semibold"
+                className="rounded-full w-12 h-12 bg-red-600 hover:bg-red-700 flex items-center justify-center text-white"
               >
-                STOP
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-6 w-6"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
               </button>
-            </div>
+
+              <button
+                onClick={findNextPartner}
+                className="rounded-full px-6 py-3 bg-blue-600 hover:bg-blue-700 flex items-center justify-center text-white font-semibold"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-5 w-5 mr-2"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M13 5l7 7-7 7M5 5l7 7-7 7"
+                  />
+                </svg>
+                Next
+              </button>
+            </>
           )}
         </div>
+
+        {/* Disconnection Alert Modal */}
+        {showDisconnectionAlert && (
+          <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+            <div className="bg-red-600 text-white p-8 rounded-xl shadow-2xl max-w-md w-full mx-4 text-center animate-pulse">
+              <div className="text-6xl mb-4">⚠️</div>
+              <h2 className="text-2xl font-bold mb-4">Partner Disconnected!</h2>
+              <p className="text-lg mb-4">
+                Your partner has left the voice chat.
+              </p>
+              <p className="text-md">
+                Automatically searching for a new stranger...
+              </p>
+              <div className="mt-6">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto"></div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

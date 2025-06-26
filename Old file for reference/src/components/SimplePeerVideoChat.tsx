@@ -119,12 +119,6 @@ export default function SimplePeerVideoChat({
   const [messages, setMessages] = useState<Message[]>([]);
   const [currentMessage, setCurrentMessage] = useState("");
 
-  // Toggle message area state
-  const [showMessageArea, setShowMessageArea] = useState(true);
-
-  // Match reason state
-  const [matchReason, setMatchReason] = useState<string | null>(null);
-
   // Initialize anonymous user tracking
   useEffect(() => {
     const initializeUser = async () => {
@@ -221,6 +215,17 @@ export default function SimplePeerVideoChat({
     (reason: string, skipAutoSearch: boolean = false) => {
       console.log("🔌 Phase 6: Handling partner disconnection -", reason);
 
+      // 🚨 ENHANCED: Show both browser alert and visual modal for immediate user notification
+      // if (typeof window !== "undefined") {
+      //   alert(
+      //     `⚠️ Partner Disconnected!\n\n${reason}\n\n${
+      //       skipAutoSearch
+      //         ? "Click START to find a new stranger."
+      //         : "Looking for a new stranger..."
+      //     }`
+      //   );
+      // }
+
       // Show visual disconnection alert modal
       setShowDisconnectionAlert(true);
       setTimeout(() => {
@@ -243,9 +248,6 @@ export default function SimplePeerVideoChat({
       // Clear chat messages
       clearMessages();
 
-      // Clear match reason
-      setMatchReason(null);
-
       // 2. Auto-Search Activation - Conditionally re-enter matching queue
       setPartnerId(null);
       setSessionId(null);
@@ -265,23 +267,13 @@ export default function SimplePeerVideoChat({
         // Start new search automatically with a small delay to prevent cascade
         setTimeout(() => {
           if (socketRef.current?.connected) {
-            // Build complete profile for matching engine
-            const profile = {
-              userGender: localStorage.getItem("snappairUserGender") || null,
-              userLocation:
-                localStorage.getItem("snappairUserLocation") || null,
-              matchGender:
-                localStorage.getItem("snappairGenderFilter") || "all",
-              matchLocation:
-                localStorage.getItem("snappairCountryFilter") || null,
-              matchGames: interests || [],
-            };
-
-            console.log("🔍 Auto-search with profile:", profile);
-
-            socketRef.current.emit("find-partner", profile, (response: any) => {
-              console.log("📨 Auto-search find-partner response:", response);
-            });
+            socketRef.current.emit(
+              "find-partner",
+              interests,
+              (response: any) => {
+                console.log("📨 Auto-search find-partner response:", response);
+              }
+            );
           }
         }, 1000);
 
@@ -311,7 +303,7 @@ export default function SimplePeerVideoChat({
 
       console.log("✅ Phase 6 complete: Auto-search activated, UI updated");
     },
-    [clearMessages, interests]
+    [clearMessages]
   );
 
   const initializeSocket = useCallback(() => {
@@ -341,14 +333,7 @@ export default function SimplePeerVideoChat({
       console.log("🎯 Partner found:", data);
       setPartnerId(data.partnerId);
       setSessionId(data.sessionId);
-      setIsLookingForPartner(false); // Stop looking for partner
       setConnectionState((prev) => ({ ...prev, queue: "matched" }));
-
-      // Capture match reason for display
-      if (data.matchReason) {
-        setMatchReason(data.matchReason);
-        console.log("💫 Match reason:", data.matchReason);
-      }
 
       // Use data directly instead of state
       const isInitiator = data.isInitiator;
@@ -480,7 +465,7 @@ export default function SimplePeerVideoChat({
 
       setConnectionState((prev) => ({ ...prev, peer: "connecting" }));
     },
-    [addMessage, partnerId, handlePartnerDisconnection]
+    [addMessage]
   );
 
   const initializeMedia = useCallback(async () => {
@@ -527,21 +512,10 @@ export default function SimplePeerVideoChat({
     setIsLookingForPartner(true);
     setConnectionState((prev) => ({ ...prev, queue: "searching" }));
 
-    // Build complete profile for matching engine
-    const profile = {
-      userGender: localStorage.getItem("snappairUserGender") || null,
-      userLocation: localStorage.getItem("snappairUserLocation") || null,
-      matchGender: localStorage.getItem("snappairGenderFilter") || "all",
-      matchLocation: localStorage.getItem("snappairCountryFilter") || null,
-      matchGames: interests || [],
-    };
-
-    console.log("🔍 Sending profile to server:", profile);
-
-    socketRef.current.emit("find-partner", profile, (response: any) => {
+    socketRef.current.emit("find-partner", interests, (response: any) => {
       console.log("📨 Find-partner response:", response);
     });
-  }, [interests]);
+  }, []);
 
   // Phase 5A: NEXT Button Click (Find New Partner)
   const findNextPartner = useCallback(() => {
@@ -566,9 +540,6 @@ export default function SimplePeerVideoChat({
     // Clear chat messages
     clearMessages();
 
-    // Clear match reason
-    setMatchReason(null);
-
     // Re-queue Process
     setPartnerId(null);
     setSessionId(null);
@@ -583,18 +554,7 @@ export default function SimplePeerVideoChat({
     setIsLookingForPartner(true);
 
     if (socketRef.current?.connected) {
-      // Build complete profile for matching engine
-      const profile = {
-        userGender: localStorage.getItem("snappairUserGender") || null,
-        userLocation: localStorage.getItem("snappairUserLocation") || null,
-        matchGender: localStorage.getItem("snappairGenderFilter") || "all",
-        matchLocation: localStorage.getItem("snappairCountryFilter") || null,
-        matchGames: interests || [],
-      };
-
-      console.log("🔍 Re-matching with profile:", profile);
-
-      socketRef.current.emit("find-partner", profile, (response: any) => {
+      socketRef.current.emit("find-partner", interests, (response: any) => {
         console.log("📨 Re-queue find-partner response:", response);
       });
     }
@@ -603,7 +563,7 @@ export default function SimplePeerVideoChat({
     console.log(
       "✅ Button state updated: NEXT hidden, STOP enabled, searching indicator shown"
     );
-  }, [partnerId, clearMessages, interests]);
+  }, [partnerId, clearMessages]);
 
   // Phase 5B: STOP Button Click (Complete Termination)
   const stopSession = useCallback(() => {
@@ -647,10 +607,6 @@ export default function SimplePeerVideoChat({
 
     // Clear chat messages
     clearMessages();
-
-    // Clear match reason
-    setMatchReason(null);
-
     console.log("✅ Session completely terminated - UI reset to initial state");
     console.log("✅ START button will show, NEXT and STOP buttons hidden");
   }, [partnerId, clearMessages]);
@@ -678,269 +634,202 @@ export default function SimplePeerVideoChat({
   const isSearching = connectionState.queue === "searching";
 
   return (
-    <div className="h-screen pt-16 pb-10 flex flex-col">
-      <div className="container mx-auto px-4 flex-grow flex flex-col">
-        <div className="flex flex-col lg:flex-row gap-4 h-[75vh]">
-          {/* User Video */}
-          <div className="relative rounded-3xl overflow-hidden flex-1 bg-snappair-primary">
-            <div className="absolute left-5 top-5 z-10 bg-black/40 rounded-full px-3 py-1 flex items-center">
-              <div className="w-3 h-3 rounded-full mr-2 bg-snappair-green"></div>
-              <span className="text-snappair-green text-sm font-medium">
-                YOU
-              </span>
+    <div className="flex flex-col h-screen bg-white w-full">
+      {/* Header - Fixed at top */}
+      <div className="fixed top-0 left-0 right-0 w-full bg-gradient-to-r from-blue-600 via-blue-500 to-purple-600 text-white px-4 py-2 z-50 h-12 flex items-center justify-between shadow-lg">
+        <div className="flex items-center space-x-4">
+          <Link
+            href="/"
+            className="text-xl font-bold bg-gradient-to-r from-white to-blue-100 bg-clip-text text-transparent"
+          >
+            Omegle
+          </Link>
+          <div className="text-sm opacity-90">Talk to strangers!</div>
+        </div>
+        <div className="text-sm opacity-90">
+          <span className="font-semibold text-green-300">38,000+</span> online
+          now
+        </div>
+      </div>
+
+      {/* Main Content Container - Below header */}
+      <div className="flex flex-col md:flex-row h-screen mt-12 w-full">
+        {/* Left Video Area - 30% on desktop, full width on mobile */}
+        <div className="w-full md:w-3/10 h-[50vh] md:h-[calc(100vh-3rem)] flex flex-col p-1 space-y-1 relative">
+          {/* Remote Video (Stranger) */}
+          <div className="flex-1 relative bg-gradient-to-br from-gray-900 to-gray-800 border-2 border-gray-300 rounded-lg overflow-hidden shadow-lg">
+            <video
+              ref={remoteVideoRef}
+              autoPlay
+              playsInline
+              className="w-full h-full object-cover"
+              style={{ transform: "scaleX(-1)" }}
+            />
+            {!isConnected && (
+              <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-800 to-gray-900">
+                <div className="text-center text-white">
+                  <div className="text-4xl mb-2">👤</div>
+                  <p className="text-sm text-gray-200">
+                    {isConnected
+                      ? "Connecting..."
+                      : isSearching
+                      ? "Looking for stranger..."
+                      : "No stranger connected"}
+                  </p>
+                </div>
+              </div>
+            )}
+            <div className="absolute top-2 left-2 bg-gradient-to-r from-black to-gray-800 bg-opacity-70 text-white px-3 py-1 rounded-full text-xs font-medium">
+              Stranger
             </div>
 
-            {/* Local video stream */}
+            {/* Modern Loading Overlay - Only over remote video */}
+            {isSearching && (
+              <div className="absolute inset-0 bg-gray-900 bg-opacity-20 backdrop-blur-sm flex items-center justify-center z-30 rounded-lg">
+                <div className=" bg-opacity-95 backdrop-blur-md p-4 rounded-2xl text-center  border border-white border-opacity-30">
+                  <div className="animate-spin rounded-full h-6 w-6 border-3 border-blue-500 border-t-transparent mx-auto mb-3"></div>
+                  <p className="text-sm font-semibold text-gray-200 mb-1">
+                    Looking for someone...
+                  </p>
+                  <p className="text-xs text-gray-200">Random chat</p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Local Video (You) */}
+          <div className="flex-1 relative bg-gradient-to-br from-gray-900 to-gray-800 border-2 border-gray-300 rounded-lg overflow-hidden shadow-lg">
             <video
               ref={localVideoRef}
               autoPlay
-              muted
               playsInline
-              className="absolute inset-0 w-full h-full object-cover"
+              muted
+              className="w-full h-full object-cover"
+              style={{ transform: "scaleX(-1)" }}
             />
-          </div>
-
-          {/* Stranger Video */}
-          <div className="relative rounded-3xl overflow-hidden flex-1 bg-snappair-primary">
-            <div className="absolute right-5 top-5 z-10 bg-black/40 rounded-full px-3 py-1 flex items-center">
-              <div className="w-3 h-3 rounded-full bg-snappair-green mr-2"></div>
-              <span className="text-snappair-green text-sm font-medium">
-                {partnerId ? "STRANGER" : "CONNECTING..."}
-              </span>
-            </div>
-
-            {/* Remote video stream */}
-            {isLookingForPartner ? (
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-white bg-zinc-900">
-                <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-white mb-4"></div>
-                <p className="text-xl mb-6">Finding your next match...</p>
-
-                {/* People animation background */}
-                <div className="absolute inset-0 overflow-hidden -z-10">
-                  <div
-                    className="absolute inset-0"
-                    style={{
-                      backgroundImage: "url('/people.webp')",
-                      backgroundSize: "cover",
-                      backgroundPosition: "center",
-                      opacity: 0.15,
-                      animation: "pan 25s infinite alternate ease-in-out",
-                    }}
-                  />
+            {connectionState.media !== "ready" && (
+              <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-800 to-gray-900">
+                <div className="text-center text-white">
+                  <div className="text-4xl mb-2">📹</div>
+                  <p className="text-sm text-gray-300">Camera not active</p>
                 </div>
+              </div>
+            )}
+            <div className="absolute top-2 left-2 bg-gradient-to-r from-blue-600 to-blue-500 bg-opacity-90 text-white px-3 py-1 rounded-full text-xs font-medium">
+              You
+            </div>
+          </div>
+        </div>
 
-                <style jsx>{`
-                  @keyframes pan {
-                    from {
-                      transform: scale(1.2) translateX(-5%) translateY(-2%);
-                    }
-                    to {
-                      transform: scale(1.2) translateX(5%) translateY(2%);
-                    }
-                  }
-                `}</style>
+        {/* Right Chat Area - 70% on desktop, full width on mobile */}
+        <div className="w-full md:w-[70%] h-auto md:h-[calc(100vh-3rem)] max-h-[50vh] md:max-h-[calc(100vh-3rem)] flex flex-col bg-gradient-to-br from-gray-50 to-white md:border-l border-gray-300 shadow-inner overflow-y-auto md:overflow-y-visible fixed md:static bottom-0 md:bottom-auto">
+          {" "}
+          {/* Chat Messages Area - Flexible height */}
+          <div
+            className="flex-1 overflow-y-auto p-4 space-y-3"
+            ref={chatMessagesRef}
+          >
+            {messages.length === 0 ? (
+              <div className="text-center text-gray-500 mt-8">
+                <div className="bg-gradient-to-r from-blue-50 to-purple-50 p-6 rounded-2xl border border-gray-200 shadow-sm">
+                  <div className="text-3xl mb-3">💬</div>
+                  <p className="text-sm text-gray-600 font-medium">
+                    {isConnected
+                      ? "You're connected to a stranger. Say hello!"
+                      : isSearching
+                      ? "Looking for someone to chat with..."
+                      : "Click START to begin chatting"}
+                  </p>
+                </div>
               </div>
             ) : (
-              <video
-                ref={remoteVideoRef}
-                autoPlay
-                playsInline
-                muted={false}
-                controls={false}
-                className="absolute inset-0 w-full h-full object-cover"
-                onLoadedMetadata={() => {
-                  console.log("Remote video metadata loaded");
-                  if (remoteVideoRef.current) {
-                    remoteVideoRef.current.play().catch(console.error);
-                  }
-                }}
-                onCanPlay={() => {
-                  console.log("Remote video can play");
-                }}
-                onPlay={() => {
-                  console.log("Remote video started playing");
-                }}
-              />
-            )}
-
-            {/* Match Reason Display - Bottom of remote video */}
-            {matchReason && isConnected && (
-              <div className="absolute bottom-3 left-3 right-3 bg-black/60 backdrop-blur-sm rounded-lg px-3 py-2 z-10">
-                <div className="flex items-center text-white text-sm">
-                  <div className="w-2 h-2 rounded-full bg-snappair-green mr-2 animate-pulse"></div>
-                  <span className="font-medium text-snappair-green">
-                    Match:
-                  </span>
-                  <span className="ml-2 text-white">{matchReason}</span>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Control Buttons */}
-        <div className="flex items-center justify-center gap-3 my-4">
-          {!isLookingForPartner && !isConnected && (
-            <button
-              onClick={startSearch}
-              disabled={!canStart}
-              className={`rounded-full px-6 py-3 flex items-center justify-center font-semibold text-lg ${
-                canStart
-                  ? "bg-green-600 hover:bg-green-700 text-white"
-                  : "bg-gray-600 text-gray-400 cursor-not-allowed"
-              }`}
-            >
-              START
-            </button>
-          )}
-
-          {isLookingForPartner && (
-            <div className="flex items-center gap-4">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-              <span className="text-lg text-white">
-                {disconnectionMessage
-                  ? "Looking for new stranger..."
-                  : "Searching for partner..."}
-              </span>
-              <button
-                onClick={stopSession}
-                className="px-6 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-semibold text-white"
-              >
-                STOP
-              </button>
-            </div>
-          )}
-
-          {isConnected && (
-            <>
-              <button
-                onClick={stopSession}
-                className="rounded-full w-12 h-12 bg-red-600 hover:bg-red-700 flex items-center justify-center text-white"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-6 w-6"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-
-              <button
-                onClick={findNextPartner}
-                className="rounded-full px-6 py-3 bg-blue-600 hover:bg-blue-700 flex items-center justify-center text-white font-semibold"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-5 w-5 mr-2"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M13 5l7 7-7 7M5 5l7 7-7 7"
-                  />
-                </svg>
-                Next
-              </button>
-
-              {/* Toggle Message Area Button */}
-              <button
-                onClick={() => setShowMessageArea(!showMessageArea)}
-                className="rounded-full w-12 h-12 bg-purple-600 hover:bg-purple-700 flex items-center justify-center text-white"
-                title={showMessageArea ? "Hide Chat" : "Show Chat"}
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-6 w-6"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-                  />
-                </svg>
-              </button>
-            </>
-          )}
-        </div>
-
-        {/* Chat Box (conditionally shown) - positioned at bottom right */}
-        {isConnected && showMessageArea && (
-          <div className="absolute bottom-24 right-4 md:right-8 w-80 md:w-96 bg-zinc-800 rounded-lg shadow-lg overflow-hidden z-10">
-            <div className="flex items-center justify-between bg-zinc-700 p-3">
-              <h3 className="text-white font-medium">Chat</h3>
-              <button
-                onClick={clearMessages}
-                className="text-zinc-300 hover:text-white"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-5 w-5"
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-              </button>
-            </div>
-
-            <div
-              ref={chatMessagesRef}
-              className="h-60 overflow-y-auto p-3 bg-zinc-900"
-            >
-              {messages.length === 0 ? (
-                <div className="text-center text-zinc-500 mt-10">
-                  No messages yet. Say hello!
-                </div>
-              ) : (
-                messages.map((message) => (
+              messages.map((message) => (
+                <div key={message.id} className="text-sm flex">
                   <div
-                    key={message.id}
-                    className={`mb-2 ${
-                      message.sender === "me" ? "text-right" : "text-left"
+                    className={`max-w-[80%] p-3 rounded-2xl shadow-sm ${
+                      message.sender === "me"
+                        ? "bg-gradient-to-r from-blue-500 to-blue-600 text-white ml-auto"
+                        : "bg-white border border-gray-200 text-gray-800"
                     }`}
                   >
-                    <div
-                      className={`inline-block rounded-lg px-3 py-2 max-w-[85%] ${
-                        message.sender === "me"
-                          ? "bg-blue-600 text-white"
-                          : "bg-zinc-700 text-white"
-                      }`}
-                    >
-                      <p>{message.text}</p>
-                      <span className="text-xs opacity-60 block mt-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span
+                        className={`font-semibold text-xs ${
+                          message.sender === "me"
+                            ? "text-blue-100"
+                            : "text-red-500"
+                        }`}
+                      >
+                        {message.sender === "me" ? "You" : "Stranger"}
+                      </span>
+                      <span
+                        className={`text-xs opacity-70 ${
+                          message.sender === "me"
+                            ? "text-blue-100"
+                            : "text-gray-500"
+                        }`}
+                      >
                         {new Date(message.timestamp).toLocaleTimeString([], {
                           hour: "2-digit",
                           minute: "2-digit",
                         })}
                       </span>
                     </div>
+                    <span className="break-words">{message.text}</span>
                   </div>
-                ))
-              )}
-            </div>
+                </div>
+              ))
+            )}
+          </div>
+          {/* Control Area - Fixed height */}
+          <div className="min-h-[120px] md:min-h-[80px] bg-gradient-to-r from-white to-gray-50 border-t border-gray-200 p-3 flex flex-col shadow-lg">
+            {/* Mobile: Stack buttons and input vertically */}
+            <div className="flex flex-col space-y-3 md:hidden">
+              {/* Action Buttons Row */}
+              <div className="flex justify-center space-x-2">
+                {!isLookingForPartner && !isConnected && (
+                  <button
+                    onClick={startSearch}
+                    disabled={!canStart}
+                    className={`px-8 py-2 rounded-full font-bold text-sm transition-all duration-200 transform hover:scale-105 shadow-lg ${
+                      canStart
+                        ? "bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white shadow-green-200"
+                        : "bg-gray-300 text-gray-500 cursor-not-allowed shadow-gray-100"
+                    }`}
+                  >
+                    START
+                  </button>
+                )}
 
-            <div className="p-2 bg-zinc-800">
-              <div className="flex gap-2">
+                {isSearching && (
+                  <button
+                    onClick={stopSession}
+                    className="bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white px-8 py-2 rounded-full font-bold text-sm transition-all duration-200 transform hover:scale-105 shadow-lg shadow-red-200"
+                  >
+                    STOP
+                  </button>
+                )}
+
+                {isConnected && (
+                  <>
+                    <button
+                      onClick={findNextPartner}
+                      className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white px-6 py-2 rounded-full font-bold text-sm transition-all duration-200 transform hover:scale-105 shadow-lg shadow-blue-200"
+                    >
+                      NEXT
+                    </button>
+                    <button
+                      onClick={stopSession}
+                      className="bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white px-6 py-2 rounded-full font-bold text-sm transition-all duration-200 transform hover:scale-105 shadow-lg shadow-red-200"
+                    >
+                      STOP
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {/* Message Input Row */}
+              <div className="flex space-x-2 w-full">
                 <input
                   type="text"
                   value={currentMessage}
@@ -952,44 +841,165 @@ export default function SimplePeerVideoChat({
                     }
                   }}
                   placeholder="Type a message..."
-                  className="flex-grow p-2 rounded bg-zinc-700 text-white placeholder:text-zinc-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  disabled={!isConnected}
+                  className="flex-1 p-3 border-2 border-gray-200 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-400 text-sm text-black shadow-inner transition-all duration-200"
                 />
                 <button
                   onClick={sendMessage}
-                  disabled={!currentMessage.trim()}
-                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed px-4 py-2 rounded text-white"
+                  disabled={!currentMessage.trim() || !isConnected}
+                  className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 disabled:from-gray-300 disabled:to-gray-400 text-white px-6 py-3 rounded-full font-bold text-sm transition-all duration-200 transform hover:scale-105 shadow-lg shadow-blue-200 disabled:shadow-gray-100 disabled:hover:scale-100"
                 >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-5 w-5"
-                    viewBox="0 0 20 20"
-                    fill="currentColor"
-                  >
-                    <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
-                  </svg>
+                  Send
                 </button>
               </div>
             </div>
-          </div>
-        )}
 
-        {/* Disconnection Alert Modal */}
-        {showDisconnectionAlert && (
-          <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
-            <div className="bg-red-600 text-white p-8 rounded-xl shadow-2xl max-w-md w-full mx-4 text-center animate-pulse">
-              <div className="text-6xl mb-4">⚠️</div>
-              <h2 className="text-2xl font-bold mb-4">Partner Disconnected!</h2>
-              <p className="text-lg mb-4">Your partner has left the chat.</p>
-              <p className="text-md">
-                Automatically searching for a new stranger...
-              </p>
-              <div className="mt-6">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto"></div>
+            {/* Desktop: Original horizontal layout */}
+            <div className="hidden md:flex md:flex-row items-center space-x-2">
+              {/* Action Buttons */}
+              <div className="flex space-x-2">
+                {!isLookingForPartner && !isConnected && (
+                  <button
+                    onClick={startSearch}
+                    disabled={!canStart}
+                    className={`px-6 py-2 rounded-full font-bold text-sm transition-all duration-200 transform hover:scale-105 shadow-lg ${
+                      canStart
+                        ? "bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white shadow-green-200"
+                        : "bg-gray-300 text-gray-500 cursor-not-allowed shadow-gray-100"
+                    }`}
+                  >
+                    START
+                  </button>
+                )}
+
+                {isSearching && (
+                  <button
+                    onClick={stopSession}
+                    className="bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white px-6 py-2 rounded-full font-bold text-sm transition-all duration-200 transform hover:scale-105 shadow-lg shadow-red-200"
+                  >
+                    STOP
+                  </button>
+                )}
+
+                {isConnected && (
+                  <>
+                    <button
+                      onClick={findNextPartner}
+                      className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white px-6 py-2 rounded-full font-bold text-sm transition-all duration-200 transform hover:scale-105 shadow-lg shadow-blue-200"
+                    >
+                      NEXT
+                    </button>
+                    <button
+                      onClick={stopSession}
+                      className="bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white px-6 py-2 rounded-full font-bold text-sm transition-all duration-200 transform hover:scale-105 shadow-lg shadow-red-200"
+                    >
+                      STOP
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {/* Message Input and Send */}
+              <div className="flex flex-1 space-x-2">
+                <input
+                  type="text"
+                  value={currentMessage}
+                  onChange={(e) => setCurrentMessage(e.target.value)}
+                  onKeyPress={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      sendMessage();
+                    }
+                  }}
+                  placeholder="Type a message..."
+                  disabled={!isConnected}
+                  className="flex-1 p-3 border-2 border-gray-200 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-400 text-sm text-black shadow-inner transition-all duration-200"
+                />
+                <button
+                  onClick={sendMessage}
+                  disabled={!currentMessage.trim() || !isConnected}
+                  className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 disabled:from-gray-300 disabled:to-gray-400 text-white px-6 py-2 rounded-full font-bold text-sm transition-all duration-200 transform hover:scale-105 shadow-lg shadow-blue-200 disabled:shadow-gray-100 disabled:hover:scale-100"
+                >
+                  Send
+                </button>
               </div>
             </div>
+
+            {/* Status Info */}
+            {/* <div className="mt-2 text-xs text-gray-500 flex justify-between bg-gray-50 px-3 py-2 rounded-full">
+              <span className="flex items-center gap-1">
+                <div
+                  className={`w-2 h-2 rounded-full ${
+                    isConnected
+                      ? "bg-green-400 animate-pulse"
+                      : isSearching
+                      ? "bg-yellow-400 animate-pulse"
+                      : "bg-gray-400"
+                  }`}
+                ></div>
+                Status:{" "}
+                <span
+                  className={`font-medium ${
+                    isConnected
+                      ? "text-green-600"
+                      : isSearching
+                      ? "text-yellow-600"
+                      : "text-gray-500"
+                  }`}
+                >
+                  {isConnected
+                    ? "Connected"
+                    : isSearching
+                    ? "Looking..."
+                    : "Disconnected"}
+                </span>
+              </span>
+              <span className="flex items-center gap-1">
+                <div
+                  className={`w-2 h-2 rounded-full ${
+                    connectionState.socket === "connected"
+                      ? "bg-green-400"
+                      : "bg-red-400"
+                  }`}
+                ></div>
+                Socket:{" "}
+                <span className="font-medium">
+                  {connectionState.socket === "connected" ? "✓" : "✗"}
+                </span>
+              </span>
+            </div> */}
           </div>
-        )}
+        </div>
       </div>
+
+      {/* 🚨 ENHANCED: Modal-style Disconnection Alert */}
+      {/* {showDisconnectionAlert && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+          <div className="bg-red-600 text-white p-8 rounded-xl shadow-2xl max-w-md w-full mx-4 text-center animate-pulse">
+            <div className="text-6xl mb-4">⚠️</div>
+            <h2 className="text-2xl font-bold mb-4">Partner Disconnected!</h2>
+            <p className="text-lg mb-4">Your partner has left the chat.</p>
+            <p className="text-md">
+              Automatically searching for a new stranger...
+            </p>
+            <div className="mt-6">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto"></div>
+            </div>
+          </div>
+        </div>
+      )} */}
+
+      {/* Phase 6: Disconnection Message Display */}
+      {/* {disconnectionMessage && (
+        <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-orange-600 text-white px-6 py-3 rounded-lg z-40">
+          <div className="flex items-center justify-center gap-2">
+            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+            <span className="text-sm font-semibold">
+              {disconnectionMessage}
+            </span>
+          </div>
+        </div>
+      )} */}
     </div>
   );
 }

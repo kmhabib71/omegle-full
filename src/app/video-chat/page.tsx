@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import SimplePeerVideoChat from "../../components/SimplePeerVideoChat";
 import UserProfileModal from "../../components/UserProfileModal";
+import { Header } from "../../components/header";
 
 interface UserProfile {
   userGender: string;
@@ -96,14 +97,16 @@ export default function VideoChat() {
 
   if (status === "loading" || !profileChecked) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
+      <div className="flex items-center justify-center min-h-screen bg-black">
         <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-500"></div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-100">
+    <main className="flex min-h-screen flex-col bg-black">
+      <Header />
+
       <UserProfileModal
         isOpen={showProfileModal}
         onClose={() => setShowProfileModal(false)}
@@ -111,6 +114,6 @@ export default function VideoChat() {
       />
 
       {!showProfileModal && <SimplePeerVideoChat />}
-    </div>
+    </main>
   );
 }

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
 import SimplePeer from "simple-peer";
+import { MatchCriteriaControls } from "./MatchCriteriaControls";
 
 interface ConnectionState {
   socket: "disconnected" | "connecting" | "connected";
@@ -52,6 +53,26 @@ export default function SimplePeerTextChat({
   // Message state
   const [messages, setMessages] = useState<Message[]>([]);
   const [currentMessage, setCurrentMessage] = useState("");
+
+  // Match criteria state
+  const [matchCriteria, setMatchCriteria] = useState({
+    gender: null as string | null,
+    country: null as string | null,
+    interests: [] as string[],
+  });
+
+  // Load match criteria from localStorage
+  useEffect(() => {
+    const savedGender = localStorage.getItem("snappairMatchGender");
+    const savedCountry = localStorage.getItem("snappairMatchCountry");
+    const savedInterests = localStorage.getItem("snappairMatchInterests");
+
+    setMatchCriteria({
+      gender: savedGender && savedGender !== "all" ? savedGender : null,
+      country: savedCountry || null,
+      interests: savedInterests ? JSON.parse(savedInterests) : [],
+    });
+  }, []);
 
   // Add message functions
   const addMessage = useCallback((text: string, sender: "me" | "partner") => {
@@ -103,6 +124,17 @@ export default function SimplePeerTextChat({
     setCurrentMessage("");
   }, []);
 
+  // Helper function to build search profile consistently
+  const buildSearchProfile = useCallback(() => {
+    return {
+      userGender: localStorage.getItem("snappairUserGender"),
+      userLocation: localStorage.getItem("snappairUserLocation"),
+      matchGender: matchCriteria.gender || "all",
+      matchCountry: matchCriteria.country,
+      matchInterest: matchCriteria.interests,
+    };
+  }, [matchCriteria]);
+
   // Phase 6: Partner Disconnection Handler
   const handlePartnerDisconnection = useCallback(
     (reason: string, skipAutoSearch: boolean = false) => {
@@ -143,9 +175,11 @@ export default function SimplePeerTextChat({
         // Start new search automatically with a small delay to prevent cascade
         setTimeout(() => {
           if (socketRef.current?.connected) {
+            const searchProfile = buildSearchProfile();
+            console.log("🔍 Auto-searching with profile:", searchProfile);
             socketRef.current.emit(
               "find-partner",
-              interests,
+              searchProfile,
               (response: any) => {
                 console.log("📨 Auto-search find-partner response:", response);
               }
@@ -179,7 +213,7 @@ export default function SimplePeerTextChat({
 
       console.log("✅ Phase 6 complete: Auto-search activated, UI updated");
     },
-    [clearMessages, interests]
+    [clearMessages, buildSearchProfile]
   );
 
   const initializeSocket = useCallback(() => {
@@ -209,6 +243,7 @@ export default function SimplePeerTextChat({
       console.log("🎯 Partner found:", data);
       setPartnerId(data.partnerId);
       setSessionId(data.sessionId);
+      setIsLookingForPartner(false); // Stop looking for partner
       setConnectionState((prev) => ({ ...prev, queue: "matched" }));
 
       // Use data directly instead of state
@@ -343,10 +378,47 @@ export default function SimplePeerTextChat({
     setIsLookingForPartner(true);
     setConnectionState((prev) => ({ ...prev, queue: "searching" }));
 
-    socketRef.current.emit("find-partner", interests, (response: any) => {
+    // Include match criteria in the search
+    const searchProfile = {
+      userGender: localStorage.getItem("snappairUserGender"),
+      userLocation: localStorage.getItem("snappairUserLocation"),
+      matchGender: matchCriteria.gender || "all",
+      matchCountry: matchCriteria.country,
+      matchInterest:
+        matchCriteria.interests.length > 0
+          ? matchCriteria.interests
+          : interests,
+    };
+
+    console.log("🔍 Text chat searching with profile:", searchProfile);
+
+    socketRef.current.emit("find-partner", searchProfile, (response: any) => {
       console.log("📨 Find-partner response:", response);
     });
-  }, [interests]);
+  }, [interests, matchCriteria]);
+
+  // Handle match criteria updates
+  const handleCriteriaUpdate = useCallback(
+    (newCriteria: any) => {
+      setMatchCriteria(newCriteria);
+
+      // Restart search with new criteria if currently searching
+      if (isLookingForPartner) {
+        setTimeout(() => {
+          startSearch();
+        }, 100);
+      }
+    },
+    [isLookingForPartner, startSearch]
+  );
+
+  const handleStopSearch = useCallback(() => {
+    if (socketRef.current && isLookingForPartner) {
+      socketRef.current.emit("cancel-search");
+      setIsLookingForPartner(false);
+      setConnectionState((prev) => ({ ...prev, queue: "not_in_queue" }));
+    }
+  }, [isLookingForPartner]);
 
   // Phase 5A: NEXT Button Click (Find New Partner)
   const findNextPartner = useCallback(() => {
@@ -379,7 +451,9 @@ export default function SimplePeerTextChat({
     setIsLookingForPartner(true);
 
     if (socketRef.current?.connected) {
-      socketRef.current.emit("find-partner", interests, (response: any) => {
+      const searchProfile = buildSearchProfile();
+      console.log("🔍 Next partner search with profile:", searchProfile);
+      socketRef.current.emit("find-partner", searchProfile, (response: any) => {
         console.log("📨 Re-queue find-partner response:", response);
       });
     }
@@ -388,7 +462,7 @@ export default function SimplePeerTextChat({
     console.log(
       "✅ Button state updated: NEXT hidden, STOP enabled, searching indicator shown"
     );
-  }, [partnerId, clearMessages, interests]);
+  }, [partnerId, clearMessages, buildSearchProfile]);
 
   // Phase 5B: STOP Button Click (Complete Termination)
   const stopSession = useCallback(() => {
@@ -463,45 +537,170 @@ export default function SimplePeerTextChat({
   const isSearching = connectionState.queue === "searching";
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-4">
-      <div className="w-full max-w-6xl">
-        <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold mb-2">SimplePeer Text Chat</h1>
-          <p className="text-gray-400">
-            Connect with strangers for text conversations
-          </p>
-        </div>
+    <div className="h-screen pt-16 pb-10 flex flex-col">
+      <div className="container mx-auto px-4 flex-grow flex flex-col">
+        <div className="flex flex-col lg:flex-row gap-4 h-[75vh]">
+          {/* User Chat Area */}
+          <div className="relative rounded-3xl overflow-hidden flex-1 bg-snappair-primary">
+            <div className="absolute left-5 top-5 z-10 bg-black/40 rounded-full px-3 py-1 flex items-center">
+              <div className="w-3 h-3 rounded-full mr-2 bg-snappair-green"></div>
+              <span className="text-snappair-green text-sm font-medium">
+                YOU
+              </span>
+            </div>
 
-        <div className="bg-gray-800 rounded-lg p-4 mb-6">
-          <h3 className="text-lg font-semibold mb-3">Connection Status</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-            <div
-              className={`p-2 rounded ${
-                connectionState.socket === "connected"
-                  ? "bg-green-600"
-                  : "bg-red-600"
-              }`}
-            >
-              Socket: {connectionState.socket}
+            {/* Chat Messages */}
+            <div className="absolute inset-0 pt-16 pb-20 px-6">
+              <div
+                ref={chatMessagesRef}
+                className="h-full overflow-y-auto space-y-3"
+              >
+                {messages.length === 0 ? (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center text-gray-400">
+                      <div className="text-6xl mb-4">💬</div>
+                      <div className="text-lg">
+                        Your messages will appear here
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  messages
+                    .filter((msg) => msg.sender === "me")
+                    .map((message) => (
+                      <div key={message.id} className="flex justify-end">
+                        <div className="max-w-xs px-4 py-2 rounded-2xl bg-blue-600 text-white">
+                          <div className="break-words">{message.text}</div>
+                          <div className="text-xs opacity-70 mt-1">
+                            {new Date(message.timestamp).toLocaleTimeString(
+                              [],
+                              {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              }
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                )}
+              </div>
             </div>
-            <div
-              className={`p-2 rounded ${
-                connectionState.peer === "connected"
-                  ? "bg-green-600"
-                  : "bg-yellow-600"
-              }`}
-            >
-              Peer: {connectionState.peer}
+
+            {/* Message Input */}
+            {isConnected && (
+              <div className="absolute bottom-4 left-4 right-4">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={currentMessage}
+                    onChange={(e) => setCurrentMessage(e.target.value)}
+                    onKeyPress={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        sendMessage();
+                      }
+                    }}
+                    placeholder="Type your message..."
+                    className="flex-1 px-4 py-3 bg-black/40 text-white rounded-full border border-gray-600 focus:border-blue-500 focus:outline-none placeholder-gray-400"
+                  />
+                  <button
+                    onClick={sendMessage}
+                    disabled={!currentMessage.trim()}
+                    className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-full font-semibold transition-colors"
+                  >
+                    Send
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Stranger Chat Area */}
+          <div className="relative rounded-3xl overflow-hidden flex-1 bg-snappair-primary">
+            <div className="absolute right-5 top-5 z-10 bg-black/40 rounded-full px-3 py-1 flex items-center">
+              <div className="w-3 h-3 rounded-full bg-snappair-green mr-2"></div>
+              <span className="text-snappair-green text-sm font-medium">
+                {partnerId ? "STRANGER" : "CONNECTING..."}
+              </span>
             </div>
-            <div
-              className={`p-2 rounded ${
-                connectionState.queue === "matched"
-                  ? "bg-green-600"
-                  : "bg-yellow-600"
-              }`}
-            >
-              Queue: {connectionState.queue}
-            </div>
+
+            {/* Stranger Messages or Search State */}
+            {isLookingForPartner ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-white bg-zinc-900">
+                <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-white mb-4"></div>
+                <p className="text-xl mb-6">
+                  Finding your text chat partner...
+                </p>
+
+                {/* People animation background */}
+                <div className="absolute inset-0 overflow-hidden -z-10">
+                  <div
+                    className="absolute inset-0"
+                    style={{
+                      backgroundImage: "url('/people.webp')",
+                      backgroundSize: "cover",
+                      backgroundPosition: "center",
+                      opacity: 0.15,
+                      animation: "pan 25s infinite alternate ease-in-out",
+                    }}
+                  />
+                </div>
+
+                {/* Match Criteria Controls - shown while searching */}
+                <MatchCriteriaControls
+                  currentCriteria={matchCriteria}
+                  onCriteriaUpdate={handleCriteriaUpdate}
+                  onStopSearch={handleStopSearch}
+                  isVisible={isLookingForPartner}
+                />
+
+                <style jsx>{`
+                  @keyframes pan {
+                    from {
+                      transform: scale(1.2) translateX(-5%) translateY(-2%);
+                    }
+                    to {
+                      transform: scale(1.2) translateX(5%) translateY(2%);
+                    }
+                  }
+                `}</style>
+              </div>
+            ) : (
+              <div className="absolute inset-0 pt-16 pb-4 px-6">
+                <div className="h-full overflow-y-auto space-y-3">
+                  {isConnected ? (
+                    messages
+                      .filter((msg) => msg.sender === "partner")
+                      .map((message) => (
+                        <div key={message.id} className="flex justify-start">
+                          <div className="max-w-xs px-4 py-2 rounded-2xl bg-gray-600 text-white">
+                            <div className="break-words">{message.text}</div>
+                            <div className="text-xs opacity-70 mt-1">
+                              {new Date(message.timestamp).toLocaleTimeString(
+                                [],
+                                {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                }
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                  ) : (
+                    <div className="flex items-center justify-center h-full">
+                      <div className="text-center text-gray-400">
+                        <div className="text-6xl mb-4 opacity-50">💬</div>
+                        <div className="text-lg">
+                          Waiting for stranger's messages...
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -534,155 +733,13 @@ export default function SimplePeerTextChat({
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-          {/* Interests Section */}
-          <div className="bg-gray-800 rounded-lg p-4">
-            <h3 className="text-lg font-semibold mb-3">Interests (Optional)</h3>
-            <div className="mb-3">
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={currentInterest}
-                  onChange={(e) => setCurrentInterest(e.target.value)}
-                  onKeyPress={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      addInterest();
-                    }
-                  }}
-                  placeholder="Add an interest..."
-                  disabled={isLookingForPartner || isConnected}
-                  className="flex-1 px-3 py-2 bg-gray-700 text-white rounded-lg border border-gray-600 focus:border-blue-500 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-                />
-                <button
-                  onClick={addInterest}
-                  disabled={
-                    !currentInterest.trim() ||
-                    isLookingForPartner ||
-                    isConnected
-                  }
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg font-semibold transition-colors"
-                >
-                  Add
-                </button>
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2 min-h-[120px]">
-              {interests.length === 0 ? (
-                <div className="text-gray-400 text-sm text-center w-full mt-8">
-                  No interests added. Leave empty for random matching.
-                </div>
-              ) : (
-                interests.map((interest) => (
-                  <span
-                    key={interest}
-                    className="px-3 py-1 bg-blue-600 text-white rounded-full text-sm flex items-center gap-2"
-                  >
-                    {interest}
-                    {!isLookingForPartner && !isConnected && (
-                      <button
-                        onClick={() => removeInterest(interest)}
-                        className="hover:bg-blue-700 rounded-full w-5 h-5 flex items-center justify-center text-xs"
-                      >
-                        ×
-                      </button>
-                    )}
-                  </span>
-                ))
-              )}
-            </div>
-            <div className="mt-3 text-xs text-gray-400">
-              {interests.length > 0
-                ? "Will match with people who share similar interests"
-                : "Leave empty to match with random strangers"}
-            </div>
-          </div>
-
-          {/* Chat Section */}
-          <div className="bg-gray-800 rounded-lg p-4">
-            <h3 className="text-lg font-semibold mb-3">
-              {isConnected ? "Chat with Stranger" : "Chat (Connect to enable)"}
-            </h3>
-            <div
-              ref={chatMessagesRef}
-              className="h-64 bg-gray-700 rounded-lg p-3 mb-3 overflow-y-auto"
-            >
-              {messages.length === 0 ? (
-                <div className="text-gray-400 text-sm text-center mt-24">
-                  {isConnected
-                    ? "No messages yet. Start chatting!"
-                    : "Connect with a partner to start chatting"}
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {messages.map((message) => (
-                    <div
-                      key={message.id}
-                      className={`flex ${
-                        message.sender === "me"
-                          ? "justify-end"
-                          : "justify-start"
-                      }`}
-                    >
-                      <div
-                        className={`max-w-xs px-3 py-2 rounded-lg text-sm ${
-                          message.sender === "me"
-                            ? "bg-blue-600 text-white"
-                            : "bg-gray-600 text-white"
-                        }`}
-                      >
-                        <div className="break-words">{message.text}</div>
-                        <div className="text-xs opacity-70 mt-1">
-                          {new Date(message.timestamp).toLocaleTimeString([], {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={currentMessage}
-                onChange={(e) => setCurrentMessage(e.target.value)}
-                onKeyPress={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    sendMessage();
-                  }
-                }}
-                placeholder={
-                  isConnected ? "Type your message..." : "Connect to chat"
-                }
-                disabled={!isConnected}
-                className="flex-1 px-3 py-2 bg-gray-700 text-white rounded-lg border border-gray-600 focus:border-blue-500 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-              />
-              <button
-                onClick={sendMessage}
-                disabled={!isConnected || !currentMessage.trim()}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg font-semibold transition-colors"
-              >
-                Send
-              </button>
-            </div>
-            <div className="mt-2 text-xs text-gray-400">
-              {partnerId
-                ? `Connected to: ${partnerId}`
-                : "No partner connected"}
-            </div>
-          </div>
-        </div>
-
-        <div className="flex justify-center gap-4">
+        {/* Control Buttons */}
+        <div className="flex items-center justify-center gap-3 my-4">
           {!isLookingForPartner && !isConnected && (
             <button
               onClick={startSearch}
               disabled={!canStart}
-              className={`px-8 py-3 rounded-lg font-semibold text-lg ${
+              className={`rounded-full px-6 py-3 flex items-center justify-center font-semibold text-lg ${
                 canStart
                   ? "bg-green-600 hover:bg-green-700 text-white"
                   : "bg-gray-600 text-gray-400 cursor-not-allowed"
@@ -692,10 +749,10 @@ export default function SimplePeerTextChat({
             </button>
           )}
 
-          {isSearching && (
+          {isLookingForPartner && (
             <div className="flex items-center gap-4">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-              <span className="text-lg">
+              <span className="text-lg text-white">
                 {disconnectionMessage
                   ? "Looking for new stranger..."
                   : interests.length > 0
@@ -704,7 +761,7 @@ export default function SimplePeerTextChat({
               </span>
               <button
                 onClick={stopSession}
-                className="px-6 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-semibold"
+                className="px-6 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-semibold text-white"
               >
                 STOP
               </button>
@@ -712,21 +769,48 @@ export default function SimplePeerTextChat({
           )}
 
           {isConnected && (
-            <div className="flex items-center gap-4">
-              <span className="text-lg text-green-400">✅ Connected!</span>
-              <button
-                onClick={findNextPartner}
-                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold"
-              >
-                NEXT
-              </button>
+            <>
               <button
                 onClick={stopSession}
-                className="px-6 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-semibold"
+                className="rounded-full w-12 h-12 bg-red-600 hover:bg-red-700 flex items-center justify-center text-white"
               >
-                STOP
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-6 w-6"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
               </button>
-            </div>
+
+              <button
+                onClick={findNextPartner}
+                className="rounded-full px-6 py-3 bg-blue-600 hover:bg-blue-700 flex items-center justify-center text-white font-semibold"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-5 w-5 mr-2"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M13 5l7 7-7 7M5 5l7 7-7 7"
+                  />
+                </svg>
+                Next
+              </button>
+            </>
           )}
         </div>
       </div>

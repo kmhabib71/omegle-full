@@ -122,9 +122,6 @@ export default function SimplePeerVideoChat({
   // Toggle message area state
   const [showMessageArea, setShowMessageArea] = useState(true);
 
-  // Match reason state
-  const [matchReason, setMatchReason] = useState<string | null>(null);
-
   // Initialize anonymous user tracking
   useEffect(() => {
     const initializeUser = async () => {
@@ -243,9 +240,6 @@ export default function SimplePeerVideoChat({
       // Clear chat messages
       clearMessages();
 
-      // Clear match reason
-      setMatchReason(null);
-
       // 2. Auto-Search Activation - Conditionally re-enter matching queue
       setPartnerId(null);
       setSessionId(null);
@@ -265,23 +259,13 @@ export default function SimplePeerVideoChat({
         // Start new search automatically with a small delay to prevent cascade
         setTimeout(() => {
           if (socketRef.current?.connected) {
-            // Build complete profile for matching engine
-            const profile = {
-              userGender: localStorage.getItem("snappairUserGender") || null,
-              userLocation:
-                localStorage.getItem("snappairUserLocation") || null,
-              matchGender:
-                localStorage.getItem("snappairGenderFilter") || "all",
-              matchLocation:
-                localStorage.getItem("snappairCountryFilter") || null,
-              matchGames: interests || [],
-            };
-
-            console.log("🔍 Auto-search with profile:", profile);
-
-            socketRef.current.emit("find-partner", profile, (response: any) => {
-              console.log("📨 Auto-search find-partner response:", response);
-            });
+            socketRef.current.emit(
+              "find-partner",
+              interests,
+              (response: any) => {
+                console.log("📨 Auto-search find-partner response:", response);
+              }
+            );
           }
         }, 1000);
 
@@ -343,12 +327,6 @@ export default function SimplePeerVideoChat({
       setSessionId(data.sessionId);
       setIsLookingForPartner(false); // Stop looking for partner
       setConnectionState((prev) => ({ ...prev, queue: "matched" }));
-
-      // Capture match reason for display
-      if (data.matchReason) {
-        setMatchReason(data.matchReason);
-        console.log("💫 Match reason:", data.matchReason);
-      }
 
       // Use data directly instead of state
       const isInitiator = data.isInitiator;
@@ -527,18 +505,7 @@ export default function SimplePeerVideoChat({
     setIsLookingForPartner(true);
     setConnectionState((prev) => ({ ...prev, queue: "searching" }));
 
-    // Build complete profile for matching engine
-    const profile = {
-      userGender: localStorage.getItem("snappairUserGender") || null,
-      userLocation: localStorage.getItem("snappairUserLocation") || null,
-      matchGender: localStorage.getItem("snappairGenderFilter") || "all",
-      matchLocation: localStorage.getItem("snappairCountryFilter") || null,
-      matchGames: interests || [],
-    };
-
-    console.log("🔍 Sending profile to server:", profile);
-
-    socketRef.current.emit("find-partner", profile, (response: any) => {
+    socketRef.current.emit("find-partner", interests, (response: any) => {
       console.log("📨 Find-partner response:", response);
     });
   }, [interests]);
@@ -566,9 +533,6 @@ export default function SimplePeerVideoChat({
     // Clear chat messages
     clearMessages();
 
-    // Clear match reason
-    setMatchReason(null);
-
     // Re-queue Process
     setPartnerId(null);
     setSessionId(null);
@@ -583,18 +547,7 @@ export default function SimplePeerVideoChat({
     setIsLookingForPartner(true);
 
     if (socketRef.current?.connected) {
-      // Build complete profile for matching engine
-      const profile = {
-        userGender: localStorage.getItem("snappairUserGender") || null,
-        userLocation: localStorage.getItem("snappairUserLocation") || null,
-        matchGender: localStorage.getItem("snappairGenderFilter") || "all",
-        matchLocation: localStorage.getItem("snappairCountryFilter") || null,
-        matchGames: interests || [],
-      };
-
-      console.log("🔍 Re-matching with profile:", profile);
-
-      socketRef.current.emit("find-partner", profile, (response: any) => {
+      socketRef.current.emit("find-partner", interests, (response: any) => {
         console.log("📨 Re-queue find-partner response:", response);
       });
     }
@@ -647,10 +600,6 @@ export default function SimplePeerVideoChat({
 
     // Clear chat messages
     clearMessages();
-
-    // Clear match reason
-    setMatchReason(null);
-
     console.log("✅ Session completely terminated - UI reset to initial state");
     console.log("✅ START button will show, NEXT and STOP buttons hidden");
   }, [partnerId, clearMessages]);
@@ -761,19 +710,6 @@ export default function SimplePeerVideoChat({
                   console.log("Remote video started playing");
                 }}
               />
-            )}
-
-            {/* Match Reason Display - Bottom of remote video */}
-            {matchReason && isConnected && (
-              <div className="absolute bottom-3 left-3 right-3 bg-black/60 backdrop-blur-sm rounded-lg px-3 py-2 z-10">
-                <div className="flex items-center text-white text-sm">
-                  <div className="w-2 h-2 rounded-full bg-snappair-green mr-2 animate-pulse"></div>
-                  <span className="font-medium text-snappair-green">
-                    Match:
-                  </span>
-                  <span className="ml-2 text-white">{matchReason}</span>
-                </div>
-              </div>
             )}
           </div>
         </div>

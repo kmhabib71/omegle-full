@@ -1,123 +1,12 @@
 const { createServer } = require("http");
 const { Server } = require("socket.io");
-const mongoose = require("mongoose");
 const MatchingEngine = require("./server/modules/matchingEngine");
 
 // Create matching engine instance
 const matchingEngine = new MatchingEngine();
 
-// Store for managing users and their connections (keeping for legacy compatibility)
+// Legacy WebRTC compatibility maps (keeping minimal for backward compatibility)
 const users = new Map();
-
-// MongoDB connection and models
-let ChatSession;
-let connectDB;
-
-// Initialize MongoDB connection
-async function initMongoDB() {
-  try {
-    const MONGODB_URI =
-      process.env.MONGODB_URI ||
-      "mongodb+srv://learnwithaidev:Flower71@cluster0.lv8e9xe.mongodb.net/omegle?retryWrites=true&w=majority&appName=Cluster0";
-
-    if (mongoose.connection.readyState === 0) {
-      await mongoose.connect(MONGODB_URI, {
-        bufferCommands: false,
-      });
-      console.log("✅ MongoDB connected for session tracking");
-    }
-
-    // Define ChatSession schema
-    const ChatSessionSchema = new mongoose.Schema(
-      {
-        sessionId: { type: String, required: true, unique: true },
-        user1Id: { type: String, required: true },
-        user2Id: { type: String, required: true },
-        sessionType: { type: String, enum: ["text", "video"], required: true },
-        startTime: { type: Date, default: Date.now },
-        endTime: { type: Date },
-        duration: { type: Number },
-        status: {
-          type: String,
-          enum: ["active", "ended", "disconnected"],
-          default: "active",
-        },
-        interests: [{ type: String }],
-        messagesCount: { type: Number, default: 0 },
-        endReason: {
-          type: String,
-          enum: ["next", "stop", "disconnect", "error"],
-        },
-        matchReason: { type: String }, // Add match reason
-      },
-      { timestamps: true }
-    );
-
-    ChatSession =
-      mongoose.models.ChatSession ||
-      mongoose.model("ChatSession", ChatSessionSchema);
-  } catch (error) {
-    console.error("❌ MongoDB connection failed:", error);
-  }
-}
-
-// Initialize MongoDB when server starts
-initMongoDB();
-
-// Helper function to create session in database
-async function createSessionInDB(
-  sessionId,
-  user1Id,
-  user2Id,
-  interests,
-  sessionType = "text",
-  matchReason = "Match found"
-) {
-  if (!ChatSession) return;
-
-  try {
-    await ChatSession.create({
-      sessionId,
-      user1Id,
-      user2Id,
-      interests: interests || [],
-      sessionType,
-      status: "active",
-      matchReason,
-    });
-    console.log(
-      `📝 Session ${sessionId} created in database with reason: ${matchReason}`
-    );
-  } catch (error) {
-    console.error("❌ Failed to create session in DB:", error);
-  }
-}
-
-// Helper function to end session in database
-async function endSessionInDB(sessionId, endReason = "disconnect") {
-  if (!ChatSession) return;
-
-  try {
-    const session = await ChatSession.findOne({ sessionId });
-    if (session && session.status === "active") {
-      const endTime = new Date();
-      const duration = Math.floor((endTime - session.startTime) / 1000);
-
-      await ChatSession.updateOne(
-        { sessionId },
-        {
-          status: "ended",
-          endTime,
-          duration,
-          endReason,
-        }
-      );
-      console.log(`📝 Session ${sessionId} ended in database (${duration}s)`);
-    }
-  } catch (error) {
-    console.error("❌ Failed to end session in DB:", error);
-  }
-}
 
 // Create HTTP server
 const httpServer = createServer((req, res) => {
@@ -173,13 +62,13 @@ io.on("connection", (socket) => {
     status: "connected",
   });
 
-  // Handle user finding partner (Phase 2) - Updated to use full profile
-  socket.on("find-partner", (profileOrInterests = [], callback) => {
+  // Handle user finding partner (Phase 2) - renamed from "join" as it's reserved
+  socket.on("find-partner", (userProfile = {}, callback) => {
     console.log(
       "🚀 FIND-PARTNER EVENT RECEIVED from:",
       socket.id,
-      "with data:",
-      profileOrInterests
+      "with profile:",
+      userProfile
     );
 
     // Send acknowledgment if callback provided
@@ -192,189 +81,166 @@ io.on("connection", (socket) => {
       });
     }
 
-    // 🔧 Handle both old format (interests array) and new format (profile object)
-    let profile;
-    if (Array.isArray(profileOrInterests)) {
-      // Old format - convert interests array to profile
-      profile = {
-        userGender: null,
-        userLocation: null,
-        matchGender: "all",
-        matchLocation: null,
-        matchGames: profileOrInterests,
-      };
-      console.log("📝 Converting legacy interests to profile:", profile);
-    } else {
-      // New format - use profile object directly
-      profile = {
-        userGender: profileOrInterests.userGender || null,
-        userLocation: profileOrInterests.userLocation || null,
-        matchGender: profileOrInterests.matchGender || "all",
-        matchLocation: profileOrInterests.matchLocation || null,
-        matchGames:
-          profileOrInterests.matchGames ||
-          profileOrInterests.matchInterest ||
-          [],
-      };
-      console.log("📝 Using profile object:", profile);
-    }
-
-    // Handle existing connections (NEXT button scenario)
-    const partnerId = matchingEngine.disconnectUsers(socket.id);
-    if (partnerId) {
+    // Handle existing connection (NEXT button scenario)
+    const existingUser = matchingEngine.users.get(socket.id);
+    if (existingUser && existingUser.partnerId) {
       console.log(
         "🔄 User clicking NEXT - disconnecting current partner:",
-        partnerId
+        existingUser.partnerId
       );
 
-      // Notify partner about disconnection with auto-search enabled
-      io.to(partnerId).emit("partner-disconnected", {
-        skipAutoSearch: false,
-        reason: "Partner clicked NEXT",
-      });
-      console.log(
-        "✅ Partner notified about disconnection (auto-search enabled):",
-        partnerId
-      );
+      const currentPartnerId = existingUser.partnerId;
+
+      // Disconnect users using matching engine
+      const partnerId = matchingEngine.disconnectUsers(socket.id);
+      if (partnerId) {
+        // Notify partner
+        io.to(partnerId).emit("partner-disconnected", {
+          skipAutoSearch: false,
+          reason: "Partner clicked NEXT",
+        });
+      }
     }
 
-    // Use matching engine to find a match
-    console.log("🔍 Using MatchingEngine to find match for:", socket.id);
-    const matchResult = matchingEngine.addUser(socket.id, profile);
+    // Add user to matching engine with enhanced profile
+    const userProfileData = {
+      userGender: userProfile.userGender || null,
+      userLocation: userProfile.userLocation || null,
+      matchGender: userProfile.matchGender || "all",
+      matchLocation:
+        userProfile.matchCountry || userProfile.matchLocation || null,
+      matchGames:
+        userProfile.matchGames ||
+        userProfile.interests ||
+        userProfile.matchInterest ||
+        [],
+    };
+
+    console.log(
+      "🔍 User profile data being sent to matching engine:",
+      userProfileData
+    );
+
+    // The addUser method handles finding matches internally
+    const matchResult = matchingEngine.addUser(socket.id, userProfileData);
 
     if (matchResult) {
-      console.log("🎯 Match found by engine:", matchResult);
-
-      const { user1, user2, matchId, reason } = matchResult;
-      const partnerId = user1 === socket.id ? user2 : user1;
-
-      // Store in legacy users map for compatibility
-      users.set(socket.id, {
-        id: socket.id,
-        interests: profile.matchGames || [],
-        inCall: true,
-        partnerId,
-        sessionId: matchId,
-        manualStop: false,
-      });
-
-      users.set(partnerId, {
-        id: partnerId,
-        interests: profile.matchGames || [],
-        inCall: true,
-        partnerId: socket.id,
-        sessionId: matchId,
-        manualStop: false,
-      });
-
-      // Determine who should initiate WebRTC
+      // Match found - create session and notify both users
+      const { user1, user2, matchId } = matchResult;
       const initiator = user1 < user2 ? user1 : user2;
+      const sessionId = matchId;
 
       console.log(
-        `🎯 Match details: initiator=${initiator}, sessionId=${matchId}, reason=${reason}`
+        `🎯 Enhanced match details: user1=${user1}, user2=${user2}, initiator=${initiator}, sessionId=${sessionId}`
       );
 
-      // Create session in database with match reason
-      const interests = profile.matchGames || [];
-      createSessionInDB(matchId, user1, user2, interests, "video", reason);
-
-      // Emit partner-found event for Phase 3
-      console.log(`📤 Sending partner-found to ${socket.id}`);
-      io.to(socket.id).emit("partner-found", {
-        partnerId,
-        sessionId: matchId,
-        isInitiator: socket.id === initiator,
-        matchReason: reason,
+      // Emit partner-found event
+      io.to(user1).emit("partner-found", {
+        partnerId: user2,
+        sessionId: sessionId,
+        isInitiator: user1 === initiator,
       });
 
-      console.log(`📤 Sending partner-found to ${partnerId}`);
-      io.to(partnerId).emit("partner-found", {
-        partnerId: socket.id,
-        sessionId: matchId,
-        isInitiator: partnerId === initiator,
-        matchReason: reason,
+      io.to(user2).emit("partner-found", {
+        partnerId: user1,
+        sessionId: sessionId,
+        isInitiator: user2 === initiator,
       });
 
-      // Also emit legacy matched event for backward compatibility
-      io.to(socket.id).emit("matched", {
-        partnerId,
-        isInitiator: socket.id === initiator,
-        sessionId: matchId,
-        matchReason: reason,
+      // Legacy compatibility
+      io.to(user1).emit("matched", {
+        partnerId: user2,
+        isInitiator: user1 === initiator,
+        sessionId: sessionId,
       });
 
-      io.to(partnerId).emit("matched", {
-        partnerId: socket.id,
-        isInitiator: partnerId === initiator,
-        sessionId: matchId,
-        matchReason: reason,
+      io.to(user2).emit("matched", {
+        partnerId: user1,
+        isInitiator: user2 === initiator,
+        sessionId: sessionId,
       });
 
-      console.log("✅ Match created successfully with reason:", reason);
+      console.log("✅ Enhanced match created successfully!");
     } else {
-      console.log("📝 No immediate match found, user added to queue");
+      console.log("📝 User added to enhanced waiting queues");
     }
   });
 
   // Handle finding next partner (Phase 5)
-  socket.on("findNext", () => {
+  socket.on("findNext", (userProfile = {}) => {
     console.log("🔄 Finding next partner for:", socket.id);
 
-    // Use matching engine to handle disconnection and re-matching
+    // Disconnect from current partner using matching engine
     const partnerId = matchingEngine.disconnectUsers(socket.id);
     if (partnerId) {
-      // Remove from legacy users map
-      users.delete(socket.id);
-      users.delete(partnerId);
-
+      // Notify partner
       io.to(partnerId).emit("partner-disconnected", {
         skipAutoSearch: false,
         reason: "Partner clicked NEXT",
       });
     }
 
-    // Get user profile for re-matching (use stored profile or default)
-    const userProfile = {
-      userGender: null,
-      userLocation: null,
-      matchGender: "all",
-      matchLocation: null,
-      matchGames: [],
+    // Use provided profile or default
+    const userProfileData = {
+      userGender: userProfile.userGender || null,
+      userLocation: userProfile.userLocation || null,
+      matchGender: userProfile.matchGender || "all",
+      matchLocation:
+        userProfile.matchCountry || userProfile.matchLocation || null,
+      matchGames:
+        userProfile.matchGames ||
+        userProfile.interests ||
+        userProfile.matchInterest ||
+        [],
     };
 
-    // Add user back to matching engine
-    const matchResult = matchingEngine.addUser(socket.id, userProfile);
+    console.log("🔍 Profile data for findNext:", userProfileData);
 
+    const matchResult = matchingEngine.addUser(socket.id, userProfileData);
     if (matchResult) {
-      // Handle immediate match (same logic as find-partner)
-      console.log("🎯 Immediate re-match found:", matchResult);
-      // ... (same match handling logic as above)
+      const { user1, user2, matchId } = matchResult;
+      const initiator = user1 < user2 ? user1 : user2;
+
+      // Notify both users
+      io.to(user1).emit("partner-found", {
+        partnerId: user2,
+        sessionId: matchId,
+        isInitiator: user1 === initiator,
+      });
+
+      io.to(user2).emit("partner-found", {
+        partnerId: user1,
+        sessionId: matchId,
+        isInitiator: user2 === initiator,
+      });
+
+      // Legacy compatibility
+      io.to(user1).emit("matched", {
+        partnerId: user2,
+        isInitiator: user1 === initiator,
+        sessionId: matchId,
+      });
+
+      io.to(user2).emit("matched", {
+        partnerId: user1,
+        isInitiator: user2 === initiator,
+        sessionId: matchId,
+      });
     }
   });
 
   // Handle leaving queue
   socket.on("leave-queue", () => {
     console.log("📤 User leaving queue:", socket.id);
-
-    // Remove from matching engine
-    matchingEngine.removeUser(socket.id);
-
-    // Remove from legacy users map
-    users.delete(socket.id);
-
+    matchingEngine.removeFromAllQueues(socket.id);
     socket.emit("queue-left");
   });
 
   // Handle partner disconnect
   socket.on("disconnect-partner", () => {
     console.log("🔌 Disconnecting partner for:", socket.id);
-
     const partnerId = matchingEngine.disconnectUsers(socket.id);
     if (partnerId) {
-      // Remove from legacy users map
-      users.delete(socket.id);
-      users.delete(partnerId);
-
       io.to(partnerId).emit("partner-disconnected", {
         skipAutoSearch: false,
         reason: "Partner manually disconnected",
@@ -385,26 +251,20 @@ io.on("connection", (socket) => {
   // Handle stopping chat (Phase 7)
   socket.on("stopChat", () => {
     console.log("🛑 Stopping chat for:", socket.id);
-
     const partnerId = matchingEngine.disconnectUsers(socket.id);
     if (partnerId) {
-      // Remove from legacy users map
-      users.delete(socket.id);
-      users.delete(partnerId);
-
       io.to(partnerId).emit("partner-disconnected", {
         skipAutoSearch: false,
         reason: "Partner stopped the chat",
       });
     }
 
-    // Set manual stop in matching engine
+    // Set manual stop flag using matching engine
     matchingEngine.setManualStop(socket.id);
-
     socket.emit("chat-stopped");
   });
 
-  // Phase 3: WebRTC signaling events (unchanged)
+  // Phase 3: WebRTC signaling events
   socket.on("webrtc-offer", (data) => {
     console.log(
       "📤 Forwarding WebRTC offer from:",
@@ -475,25 +335,31 @@ io.on("connection", (socket) => {
   // Legacy WebRTC signaling (for backward compatibility)
   socket.on("offer", (data) => {
     console.log("📤 Forwarding offer from:", socket.id);
-    const user = users.get(socket.id);
-    if (user && user.partnerId) {
-      socket.to(user.partnerId).emit("offer", data);
+    const matchInfo = matchingEngine.activeMatches.get(socket.id);
+    if (matchInfo) {
+      const partnerId =
+        matchInfo.user1 === socket.id ? matchInfo.user2 : matchInfo.user1;
+      socket.to(partnerId).emit("offer", data);
     }
   });
 
   socket.on("answer", (data) => {
     console.log("📥 Forwarding answer from:", socket.id);
-    const user = users.get(socket.id);
-    if (user && user.partnerId) {
-      socket.to(user.partnerId).emit("answer", data);
+    const matchInfo = matchingEngine.activeMatches.get(socket.id);
+    if (matchInfo) {
+      const partnerId =
+        matchInfo.user1 === socket.id ? matchInfo.user2 : matchInfo.user1;
+      socket.to(partnerId).emit("answer", data);
     }
   });
 
   socket.on("ice-candidate", (data) => {
     console.log("🧊 Forwarding ICE candidate from:", socket.id);
-    const user = users.get(socket.id);
-    if (user && user.partnerId) {
-      socket.to(user.partnerId).emit("ice-candidate", data);
+    const matchInfo = matchingEngine.activeMatches.get(socket.id);
+    if (matchInfo) {
+      const partnerId =
+        matchInfo.user1 === socket.id ? matchInfo.user2 : matchInfo.user1;
+      socket.to(partnerId).emit("ice-candidate", data);
     }
   });
 
@@ -576,9 +442,11 @@ io.on("connection", (socket) => {
 
   // Handle text messages (Phase 4)
   socket.on("message", (message) => {
-    const user = users.get(socket.id);
-    if (user && user.partnerId) {
-      socket.to(user.partnerId).emit("message", {
+    const matchInfo = matchingEngine.activeMatches.get(socket.id);
+    if (matchInfo) {
+      const partnerId =
+        matchInfo.user1 === socket.id ? matchInfo.user2 : matchInfo.user1;
+      socket.to(partnerId).emit("message", {
         text: message,
         sender: "stranger",
         timestamp: Date.now(),
@@ -590,23 +458,18 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log("❌ User disconnected:", socket.id);
 
-    // Use matching engine to handle disconnection
+    // Disconnect from current partner using matching engine
     const partnerId = matchingEngine.disconnectUsers(socket.id);
     if (partnerId) {
-      // Remove from legacy users map
-      users.delete(socket.id);
-      users.delete(partnerId);
-
       // Don't skip auto-search for unexpected disconnections
       io.to(partnerId).emit("partner-disconnected", {
         skipAutoSearch: false,
         reason: "Partner disconnected unexpectedly",
       });
-    } else {
-      // Just remove user if no active match
-      matchingEngine.removeUser(socket.id);
-      users.delete(socket.id);
     }
+
+    // Remove from matching engine
+    matchingEngine.removeUser(socket.id);
   });
 
   // Heartbeat for connection monitoring
@@ -682,7 +545,7 @@ httpServer.listen(PORT, (err) => {
   }
   console.log(`🚀 Socket.IO server ready on http://localhost:${PORT}`);
   console.log("📡 WebRTC signaling server is running");
-  console.log("🔧 Using MatchingEngine for user matching");
+  console.log("🔧 Phase 1 debugging enabled");
 });
 
 // Handle process termination gracefully
